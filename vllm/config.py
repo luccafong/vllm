@@ -2975,6 +2975,12 @@ class VllmConfig:
     additional_config: SupportsHash = field(default=None,
                                             init=True)  # type: ignore
     instance_id: str = ""
+    
+    is_host: bool = False
+    pipeline_leader_connect_timeout_secs: int = 600
+    leader_host_addr: str = "localhost"
+    leader_host_port: int = 0
+
 
     def compute_hash(self) -> str:
         """
