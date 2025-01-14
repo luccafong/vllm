@@ -33,6 +33,7 @@ class RendezvousData:
     global_rank: int
     role_rank: int
     world_size: int
+    group_rank: int
     local_world_size: int
     role_world_size: int
     group_world_size: int
@@ -104,6 +105,7 @@ class WorkerBase(ABC):
         You can stop the loop by executing a driver worker with an empty output.
         See `stop_remote_worker_execution_loop` for more details.
         """
+        logger.info("start_worker_execution_loop with")
         with self.current_platform.inference_mode():
             while True:
                 output = self.execute_model(execute_model_req=None)
@@ -270,6 +272,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         if not broadcast_data:
             return None
 
+        logger.info("got broadcast input from driver")
         worker_input = WorkerInput.from_broadcasted_tensor_dict(broadcast_data)
         model_input = self.model_runner.make_model_input_from_broadcasted_tensor_dict(
             broadcast_data
@@ -349,10 +352,12 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         # If there is no input, we don't need to execute the model.
         if worker_input.num_seq_groups == 0:
             return []
+        logger.info("start receiving inptus")
 
         intermediate_tensors = None
         orig_model_execute_time = 0.0
         if not get_pp_group().is_first_rank:
+            logger.info("pp 1+ rank")
             intermediate_tensors = IntermediateTensors(
                 get_pp_group().recv_tensor_dict(all_gather_group=get_tp_group())
             )

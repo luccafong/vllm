@@ -68,10 +68,10 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
     """Python multiprocessing-based multi-GPU executor"""
 
     uses_ray: bool = False
-    use_rdzv: bool = False
+    use_rdzv: bool = True
 
     def _wait_for_host(self) -> None:
-        if not self.vllm_config.is_host:
+        if self.vllm_config.multi_host_rank > 0:
 
             def wait_for_leader() -> None:
                 if self.vllm_config.pipeline_leader_connect_timeout_secs <= 0:
@@ -92,7 +92,7 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
                                 self.vllm_config.leader_host_addr,
                                 self.vllm_config.leader_host_port,
                             ),
-                            timeout=60,
+                            timeout=600,
                         )
                         sock.close()
                         return
@@ -111,20 +111,22 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
     def _init_rdzv(
         self, run_id: str, nodes: int, local_world_size: int
     ) -> List[RendezvousData]:
-        rdvz_is_host = True
-        rdvz_rank = 0
+        rdvz_is_host = self.vllm_config.multi_host_rank == 0
         rdzv_parameters = RendezvousParameters(
             backend="c10d",
-            endpoint="localhost:0",
+            endpoint=f"{self.vllm_config.leader_host_addr}:{self.vllm_config.leader_host_port}",
             run_id=run_id,
             min_nodes=nodes,
             max_nodes=nodes,
             is_host=rdvz_is_host,
-            rank=rdvz_rank,
+            rank=self.vllm_config.multi_host_rank,
+            join_timeout=1000,
         )
         rdzv_handler = rdzv_registry.get_rendezvous_handler(rdzv_parameters)
-
+        logger.info(f"Rendezvous handler: {type(rdzv_handler)}")
         rdzv_info = rdzv_handler.next_rendezvous()
+        logger.info(f"Rendezvous created")
+
         store = rdzv_info.store
         group_rank = rdzv_info.rank
         group_world_size = rdzv_info.world_size
@@ -190,7 +192,9 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
                 base_role_rank,
                 role_world_size,
             ) = json.loads(store.get(f"{ASSIGNED_RANKS_PREFIX}{group_rank}"))
+        self.store = store
         rdzv_worker_data = []
+        logger.info(f"Rendezvous store: {store}")
         for local_rank in range(local_world_size):
             rdzv_worker_data.append(
                 RendezvousData(
@@ -206,9 +210,11 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
                     master_addr=master_addr,
                     master_port=master_port,
                     run_id=rdzv_handler.get_run_id(),
-                    use_agent_store=rdzv_handler.use_agent_store(),
+                    use_agent_store=rdzv_handler.use_agent_store,
+                    group_rank=group_rank,
                 )
             )
+        logger.info(f"Rendezvous data: {rdzv_worker_data}")
         return rdzv_worker_data
 
         # TODO:
@@ -218,23 +224,29 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
         # pass
 
     def _init_executor(self) -> None:
+
+        world_size = self.parallel_config.world_size
+        max_local_world_size = torch.cuda.device_count()
+        self.local_world_size = min(max_local_world_size, world_size)
         self._check_executor_parameters()
 
         # Create the parallel GPU workers.
-        world_size = self.parallel_config.world_size
-        local_world_size = torch.cuda.device_count()
-        nnodes = world_size // local_world_size
+        nnodes = world_size // self.local_world_size
         tensor_parallel_size = self.parallel_config.tensor_parallel_size
-
         # Set multiprocessing envs that are common to V0 and V1
         set_multiprocessing_worker_envs(self.parallel_config)
 
         # Multiprocessing-based executor does not support multi-node setting.
         # Since it only works for single node, we can use the loopback address
         # 127.0.0.1 for communication.
-        distributed_init_method = get_distributed_init_method(
-            "127.0.0.1", get_open_port()
-        )
+        if nnodes > 1:
+            distributed_init_method = get_distributed_init_method(
+                self.vllm_config.leader_host_addr, get_open_port()
+            )
+        else:
+            distributed_init_method = get_distributed_init_method(
+                "127.0.0.1", get_open_port()
+            )
 
         self.workers: List[ProcessWorkerWrapper] = []
         # This is the list of workers that are rank 0 of each TP group EXCEPT
@@ -245,10 +257,11 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
         # worker in a TP group. These are the workers that will be
         # broadcasted to.
         self.non_driver_workers: List[ProcessWorkerWrapper] = []
-        if self.use_rdzv:
+        self.store: Optional[torch.distributed.Store] = None
+        if self.use_rdzv and nnodes > 1:
             self._wait_for_host()
             self.rdzv_datas = self._init_rdzv(
-                self.vllm_config.instance_id, nnodes, local_world_size
+                self.vllm_config.instance_id, nnodes, self.local_world_size
             )
         else:
             self.rdzv_datas = None
@@ -256,11 +269,11 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
             self.worker_monitor = None
         else:
             result_handler = ResultHandler()
-            if self.use_rdzv and not self.vllm_config.is_host:
+            if self.use_rdzv and self.vllm_config.multi_host_rank > 0:
                 worker_start_rank = 0  # no driver worker if using rdzv and not is host
             else:
                 worker_start_rank = 1
-            for rank in range(worker_start_rank, world_size):
+            for rank in range(worker_start_rank, self.local_world_size):
                 rdzv_data = (
                     self.rdzv_datas[rank] if self.rdzv_datas is not None else None
                 )
@@ -269,15 +282,21 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
                     partial(
                         create_worker,
                         **self._get_worker_kwargs(
-                            rank=rank,
+                            rank=(
+                                rdzv_data.global_rank if rdzv_data is not None else rank
+                            ),
                             local_rank=rank,
                             distributed_init_method=distributed_init_method,
                             rdzv_data=rdzv_data,
+                            # store=self.store,
                         ),
                     ),
                 )
                 self.workers.append(worker)
-                if rank % tensor_parallel_size == 0:
+                if (
+                    rank % tensor_parallel_size == 0
+                    and self.vllm_config.multi_host_rank == 0
+                ):
                     self.tp_driver_workers.append(worker)
                 else:
                     self.non_driver_workers.append(worker)
@@ -288,10 +307,11 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
 
         # Set up signal handlers to shutdown the executor cleanly
         # sometimes gc does not work well
-        if not self.use_rdzv or self.vllm_config.is_host:
+        if not self.use_rdzv or self.vllm_config.multi_host_rank == 0:
             self.driver_worker = self._create_worker(
                 distributed_init_method=distributed_init_method,
                 rdzv_data=self.rdzv_datas[0] if self.rdzv_datas else None,
+                # store=self.store,
             )
         else:
             self.driver_worker = None
@@ -302,9 +322,13 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
         )
 
     def _check_executor_parameters(self):
-        world_size = self.parallel_config.world_size
+        world_size = self.local_world_size
         tensor_parallel_size = self.parallel_config.tensor_parallel_size
 
+        assert world_size % self.local_world_size == 0, (
+            f"please ensure that world_size ({world_size}) "
+            f"is divisible by max local gpu count ({self.local_world_size})"
+        )
         # Set CUDA_VISIBLE_DEVICES for the driver, inherited by workers
         if "CUDA_VISIBLE_DEVICES" not in os.environ:
             update_environment_variables(
@@ -394,12 +418,17 @@ class MultiprocessingGPUExecutorAsync(
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.driver_exec_model = make_async(self.driver_worker.execute_model)
+        if self.driver_worker is not None:
+            self.driver_exec_model = make_async(self.driver_worker.execute_model)
+        else:
+            self.driver_exec_model = None
         self.pp_locks: Optional[List[asyncio.Lock]] = None
 
     async def _driver_execute_model_async(
         self, execute_model_req: Optional[ExecuteModelRequest] = None
     ) -> List[SamplerOutput]:
+        if self.driver_exec_model is None:
+            raise RuntimeError("non-driver worker does not accept model requests")
         if not self.tp_driver_workers:
             return await self.driver_exec_model(execute_model_req)
 

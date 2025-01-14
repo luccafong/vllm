@@ -1,5 +1,7 @@
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+import torch
+
 from vllm.executor.executor_base import ExecutorAsyncBase, ExecutorBase
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
@@ -39,6 +41,7 @@ class GPUExecutor(ExecutorBase):
         rank: int = 0,
         distributed_init_method: Optional[str] = None,
         rdzv_data: Optional[RendezvousData] = None,
+        store: Optional[torch.distributed.Store] = None,
     ) -> Dict[str, Any]:
         """Return worker init args for a given rank."""
         if distributed_init_method is None:
@@ -53,6 +56,7 @@ class GPUExecutor(ExecutorBase):
             is_driver_worker=(not self.parallel_config)
             or (rank % self.parallel_config.tensor_parallel_size == 0),
             rdzv_data=rdzv_data,
+            store=store,
         )
 
     def _create_worker(
@@ -61,6 +65,7 @@ class GPUExecutor(ExecutorBase):
         rank: int = 0,
         distributed_init_method: Optional[str] = None,
         rdzv_data: Optional[RendezvousData] = None,
+        store: Optional[torch.distributed.Store] = None,
     ):
         return create_worker(
             **self._get_worker_kwargs(
@@ -68,6 +73,7 @@ class GPUExecutor(ExecutorBase):
                 rank=rank,
                 distributed_init_method=distributed_init_method,
                 rdzv_data=rdzv_data,
+                store=store,
             )
         )
 

@@ -25,15 +25,31 @@ import traceback
 import uuid
 import warnings
 import weakref
-from asyncio import FIRST_COMPLETED, AbstractEventLoop, Task
-from collections import OrderedDict, UserDict, defaultdict
+from asyncio import AbstractEventLoop, FIRST_COMPLETED, Task
+from collections import defaultdict, OrderedDict, UserDict
 from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache, partial, wraps
-from typing import (TYPE_CHECKING, Any, AsyncGenerator, Awaitable, Callable,
-                    Dict, Generator, Generic, Iterator, List, Literal,
-                    NamedTuple, Optional, Tuple, Type, TypeVar, Union,
-                    overload)
+from typing import (
+    Any,
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Dict,
+    Generator,
+    Generic,
+    Iterator,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    overload,
+    Tuple,
+    Type,
+    TYPE_CHECKING,
+    TypeVar,
+    Union,
+)
 from uuid import uuid4
 
 import numpy as np
@@ -41,14 +57,14 @@ import numpy.typing as npt
 import psutil
 import torch
 import torch.types
+
+import vllm.envs as envs
 import yaml
 import zmq
 import zmq.asyncio
 from packaging.version import Version
 from torch.library import Library
-from typing_extensions import Never, ParamSpec, TypeIs, assert_never
-
-import vllm.envs as envs
+from typing_extensions import assert_never, Never, ParamSpec, TypeIs
 from vllm.logger import enable_trace_function_call, init_logger
 
 if TYPE_CHECKING:
@@ -61,55 +77,58 @@ logger = init_logger(__name__)
 # Reminder: Please update docs/source/features/compatibility_matrix.md
 # If the feature combo become valid
 
-STR_NOT_IMPL_ENC_DEC_SWA = \
-    "Sliding window attention for encoder/decoder models " + \
-                    "is not currently supported."
+STR_NOT_IMPL_ENC_DEC_SWA = (
+    "Sliding window attention for encoder/decoder models "
+    + "is not currently supported."
+)
 
-STR_NOT_IMPL_ENC_DEC_PREFIX_CACHE = \
-    "Prefix caching for encoder/decoder models " + \
-                    "is not currently supported."
+STR_NOT_IMPL_ENC_DEC_PREFIX_CACHE = (
+    "Prefix caching for encoder/decoder models " + "is not currently supported."
+)
 
-STR_NOT_IMPL_ENC_DEC_CHUNKED_PREFILL = \
-    "Chunked prefill for encoder/decoder models " + \
-                    "is not currently supported."
+STR_NOT_IMPL_ENC_DEC_CHUNKED_PREFILL = (
+    "Chunked prefill for encoder/decoder models " + "is not currently supported."
+)
 
 STR_NOT_IMPL_ENC_DEC_LOGIT_SOFTCAP = (
     "Models with logits_soft_cap "
     "require FlashInfer backend, which is "
     "currently not supported for encoder/decoder "
-    "models.")
+    "models."
+)
 
-STR_NOT_IMPL_ENC_DEC_LORA = ("LoRA is currently not currently "
-                             "supported with encoder/decoder "
-                             "models.")
+STR_NOT_IMPL_ENC_DEC_LORA = (
+    "LoRA is currently not currently " "supported with encoder/decoder " "models."
+)
 
-STR_NOT_IMPL_ENC_DEC_PP = ("Pipeline parallelism is not "
-                           "currently supported with "
-                           "encoder/decoder models.")
+STR_NOT_IMPL_ENC_DEC_PP = (
+    "Pipeline parallelism is not " "currently supported with " "encoder/decoder models."
+)
 
-STR_NOT_IMPL_ENC_DEC_MM = ("Multimodal is not currently "
-                           "supported with encoder/decoder "
-                           "models.")
+STR_NOT_IMPL_ENC_DEC_MM = (
+    "Multimodal is not currently " "supported with encoder/decoder " "models."
+)
 
-STR_NOT_IMPL_ENC_DEC_SPEC_DEC = ("Speculative decoding is not "
-                                 "currently supported with encoder/"
-                                 "decoder models.")
+STR_NOT_IMPL_ENC_DEC_SPEC_DEC = (
+    "Speculative decoding is not " "currently supported with encoder/" "decoder models."
+)
 
-STR_NOT_IMPL_ENC_DEC_BACKEND = ("XFormers and Flash-Attention are the only "
-                                "backends currently supported with encoder/"
-                                "decoder models.")
+STR_NOT_IMPL_ENC_DEC_BACKEND = (
+    "XFormers and Flash-Attention are the only "
+    "backends currently supported with encoder/"
+    "decoder models."
+)
 
-STR_NOT_IMPL_ENC_DEC_PROMPT_ADAPTER = ("Prompt adapters are not "
-                                       "currently supported with encoder/"
-                                       "decoder models.")
+STR_NOT_IMPL_ENC_DEC_PROMPT_ADAPTER = (
+    "Prompt adapters are not " "currently supported with encoder/" "decoder models."
+)
 
 # Efficiently import all enc/dec error strings
 # rather than having to import all of the above
 STR_NOT_IMPL_ENC_DEC_ERR_STRS = {
     "STR_NOT_IMPL_ENC_DEC_SWA": STR_NOT_IMPL_ENC_DEC_SWA,
     "STR_NOT_IMPL_ENC_DEC_PREFIX_CACHE": STR_NOT_IMPL_ENC_DEC_PREFIX_CACHE,
-    "STR_NOT_IMPL_ENC_DEC_CHUNKED_PREFILL":
-    STR_NOT_IMPL_ENC_DEC_CHUNKED_PREFILL,
+    "STR_NOT_IMPL_ENC_DEC_CHUNKED_PREFILL": STR_NOT_IMPL_ENC_DEC_CHUNKED_PREFILL,
     "STR_NOT_IMPL_ENC_DEC_LOGIT_SOFTCAP": STR_NOT_IMPL_ENC_DEC_LOGIT_SOFTCAP,
     "STR_NOT_IMPL_ENC_DEC_LORA": STR_NOT_IMPL_ENC_DEC_LORA,
     "STR_NOT_IMPL_ENC_DEC_PP": STR_NOT_IMPL_ENC_DEC_PP,
@@ -159,7 +178,7 @@ TORCH_DTYPE_TO_NUMPY_DTYPE = {
     torch.int64: np.int64,
 }
 
-P = ParamSpec('P')
+P = ParamSpec("P")
 T = TypeVar("T")
 U = TypeVar("U")
 
@@ -167,8 +186,7 @@ _K = TypeVar("_K", bound=Hashable)
 _V = TypeVar("_V")
 
 
-class _Sentinel:
-    ...
+class _Sentinel: ...
 
 
 ALL_PINNED_SENTINEL = _Sentinel()
@@ -285,10 +303,12 @@ class LRUCache(Generic[_K, _V]):
             # pop the oldest item in the cache that is not pinned
             lru_key = next(
                 (key for key in self.cache if key not in self.pinned_items),
-                ALL_PINNED_SENTINEL)
+                ALL_PINNED_SENTINEL,
+            )
             if lru_key is ALL_PINNED_SENTINEL:
-                raise RuntimeError("All items are pinned, "
-                                   "cannot remove oldest from the cache.")
+                raise RuntimeError(
+                    "All items are pinned, " "cannot remove oldest from the cache."
+                )
         else:
             lru_key = next(iter(self.cache))
         self.pop(lru_key)  # type: ignore
@@ -346,8 +366,7 @@ class PyObjectCache:
         return obj
 
     def reset(self):
-        """Makes all cached-objects available for the next scheduler iteration.
-        """
+        """Makes all cached-objects available for the next scheduler iteration."""
         self._index = 0
 
 
@@ -355,8 +374,8 @@ class PyObjectCache:
 def get_max_shared_memory_bytes(gpu: int = 0) -> int:
     """Returns the maximum shared memory per thread block in bytes."""
     from vllm import _custom_ops as ops
-    max_shared_mem = (
-        ops.get_max_shared_memory_per_block_device_attribute(gpu))
+
+    max_shared_mem = ops.get_max_shared_memory_per_block_device_attribute(gpu)
     # value 0 will cause MAX_SEQ_LEN become negative and test_attention.py
     # will fail
     assert max_shared_mem > 0, "max_shared_mem can not be zero"
@@ -373,8 +392,7 @@ def random_uuid() -> str:
 
 
 def make_async(
-    func: Callable[P, T],
-    executor: Optional[concurrent.futures.Executor] = None
+    func: Callable[P, T], executor: Optional[concurrent.futures.Executor] = None
 ) -> Callable[P, Awaitable[T]]:
     """Take a blocking function, and run it on in an executor thread.
 
@@ -391,15 +409,14 @@ def make_async(
     return _async_wrapper
 
 
-def _next_task(iterator: AsyncGenerator[T, None],
-               loop: AbstractEventLoop) -> Task:
+def _next_task(iterator: AsyncGenerator[T, None], loop: AbstractEventLoop) -> Task:
     # Can use anext() in python >= 3.10
     return loop.create_task(iterator.__anext__())  # type: ignore[arg-type]
 
 
 async def merge_async_iterators(
-    *iterators: AsyncGenerator[T,
-                               None], ) -> AsyncGenerator[Tuple[int, T], None]:
+    *iterators: AsyncGenerator[T, None],
+) -> AsyncGenerator[Tuple[int, T], None]:
     """Merge multiple asynchronous iterators into a single iterator.
 
     This method handle the case where some iterators finish before others.
@@ -412,8 +429,7 @@ async def merge_async_iterators(
     awaits = {_next_task(pair[1], loop): pair for pair in enumerate(iterators)}
     try:
         while awaits:
-            done, _ = await asyncio.wait(awaits.keys(),
-                                         return_when=FIRST_COMPLETED)
+            done, _ = await asyncio.wait(awaits.keys(), return_when=FIRST_COMPLETED)
             for d in done:
                 pair = awaits.pop(d)
                 try:
@@ -431,8 +447,7 @@ async def merge_async_iterators(
                 await it.aclose()
 
 
-async def collect_from_async_generator(
-        iterator: AsyncGenerator[T, None]) -> List[T]:
+async def collect_from_async_generator(iterator: AsyncGenerator[T, None]) -> List[T]:
     """Collect all items from an async generator into a list."""
     items = []
     async for item in iterator:
@@ -448,7 +463,8 @@ def get_ip() -> str:
             " it is often used by Docker and other software to"
             "interact with the container's network stack. Please "
             "use VLLM_HOST_IP instead to set the IP address for vLLM processes"
-            " to communicate with each other.")
+            " to communicate with each other."
+        )
     if host_ip:
         return host_ip
 
@@ -476,7 +492,8 @@ def get_ip() -> str:
         "Failed to get the IP address, using 0.0.0.0 by default."
         "The value can be set by the environment variable"
         " VLLM_HOST_IP or HOST_IP.",
-        stacklevel=2)
+        stacklevel=2,
+    )
     return "0.0.0.0"
 
 
@@ -501,6 +518,7 @@ def get_open_zmq_ipc_path() -> str:
 
 def get_open_port() -> int:
     port = envs.VLLM_PORT
+
     if port is not None:
         while True:
             try:
@@ -509,8 +527,7 @@ def get_open_port() -> int:
                     return port
             except OSError:
                 port += 1  # Increment port number if already in use
-                logger.info("Port %d is already in use, trying port %d",
-                            port - 1, port)
+                logger.info("Port %d is already in use, trying port %d", port - 1, port)
     # try ipv4
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -544,15 +561,18 @@ def update_environment_variables(envs: Dict[str, str]):
     for k, v in envs.items():
         if k in os.environ and os.environ[k] != v:
             logger.warning(
-                "Overwriting environment variable %s "
-                "from '%s' to '%s'", k, os.environ[k], v)
+                "Overwriting environment variable %s " "from '%s' to '%s'",
+                k,
+                os.environ[k],
+                v,
+            )
         os.environ[k] = v
 
 
 def chunk_list(lst: List[T], chunk_size: int):
     """Yield successive chunk_size chunks from lst."""
     for i in range(0, len(lst), chunk_size):
-        yield lst[i:i + chunk_size]
+        yield lst[i : i + chunk_size]
 
 
 def cdiv(a: int, b: int) -> int:
@@ -570,10 +590,11 @@ def _generate_random_fp8(
     # to generate random data for fp8 data.
     # For example, s.11111.00 in fp8e5m2 format represents Inf.
     #     | E4M3        | E5M2
-    #-----|-------------|-------------------
+    # -----|-------------|-------------------
     # Inf | N/A         | s.11111.00
     # NaN | s.1111.111  | s.11111.{01,10,11}
     from vllm import _custom_ops as ops
+
     tensor_tmp = torch.empty_like(tensor, dtype=torch.float16)
     tensor_tmp.uniform_(low, high)
     ops.convert_fp8(tensor, tensor_tmp)
@@ -581,8 +602,9 @@ def _generate_random_fp8(
 
 
 def get_kv_cache_torch_dtype(
-        cache_dtype: Optional[Union[str, torch.dtype]],
-        model_dtype: Optional[Union[str, torch.dtype]] = None) -> torch.dtype:
+    cache_dtype: Optional[Union[str, torch.dtype]],
+    model_dtype: Optional[Union[str, torch.dtype]] = None,
+) -> torch.dtype:
     if isinstance(cache_dtype, str):
         if cache_dtype == "auto":
             if isinstance(model_dtype, str):
@@ -616,6 +638,7 @@ def create_kv_caches_with_random_flash(
     device: Optional[str] = "cuda",
 ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
     from vllm.platforms import current_platform
+
     current_platform.seed_everything(seed)
 
     torch_dtype = get_kv_cache_torch_dtype(cache_dtype, model_dtype)
@@ -626,16 +649,15 @@ def create_kv_caches_with_random_flash(
     value_caches: List[torch.Tensor] = []
 
     for _ in range(num_layers):
-        key_value_cache = torch.empty(size=key_value_cache_shape,
-                                      dtype=torch_dtype,
-                                      device=device)
+        key_value_cache = torch.empty(
+            size=key_value_cache_shape, dtype=torch_dtype, device=device
+        )
         if cache_dtype in ["auto", "half", "bfloat16", "float"]:
             key_value_cache.uniform_(-scale, scale)
-        elif cache_dtype == 'fp8':
+        elif cache_dtype == "fp8":
             _generate_random_fp8(key_value_cache, -scale, scale)
         else:
-            raise ValueError(
-                f"Does not support key cache of type {cache_dtype}")
+            raise ValueError(f"Does not support key cache of type {cache_dtype}")
         key_caches.append(key_value_cache[:, 0])
         value_caches.append(key_value_cache[:, 1])
     return key_caches, value_caches
@@ -658,6 +680,7 @@ def create_kv_caches_with_random(
             f"Does not support key cache of type fp8 with head_size {head_size}"
         )
     from vllm.platforms import current_platform
+
     current_platform.seed_everything(seed)
 
     torch_dtype = get_kv_cache_torch_dtype(cache_dtype, model_dtype)
@@ -667,31 +690,27 @@ def create_kv_caches_with_random(
     key_cache_shape = (num_blocks, num_heads, head_size // x, block_size, x)
     key_caches: List[torch.Tensor] = []
     for _ in range(num_layers):
-        key_cache = torch.empty(size=key_cache_shape,
-                                dtype=torch_dtype,
-                                device=device)
+        key_cache = torch.empty(size=key_cache_shape, dtype=torch_dtype, device=device)
         if cache_dtype in ["auto", "half", "bfloat16", "float"]:
             key_cache.uniform_(-scale, scale)
-        elif cache_dtype == 'fp8':
+        elif cache_dtype == "fp8":
             _generate_random_fp8(key_cache, -scale, scale)
         else:
-            raise ValueError(
-                f"Does not support key cache of type {cache_dtype}")
+            raise ValueError(f"Does not support key cache of type {cache_dtype}")
         key_caches.append(key_cache)
 
     value_cache_shape = (num_blocks, num_heads, head_size, block_size)
     value_caches: List[torch.Tensor] = []
     for _ in range(num_layers):
-        value_cache = torch.empty(size=value_cache_shape,
-                                  dtype=torch_dtype,
-                                  device=device)
+        value_cache = torch.empty(
+            size=value_cache_shape, dtype=torch_dtype, device=device
+        )
         if cache_dtype in ["auto", "half", "bfloat16", "float"]:
             value_cache.uniform_(-scale, scale)
-        elif cache_dtype == 'fp8':
+        elif cache_dtype == "fp8":
             _generate_random_fp8(value_cache, -scale, scale)
         else:
-            raise ValueError(
-                f"Does not support value cache of type {cache_dtype}")
+            raise ValueError(f"Does not support value cache of type {cache_dtype}")
         value_caches.append(value_cache)
     return key_caches, value_caches
 
@@ -699,6 +718,7 @@ def create_kv_caches_with_random(
 @lru_cache(maxsize=None)
 def is_pin_memory_available() -> bool:
     from vllm.platforms import current_platform
+
     return current_platform.is_pin_memory_available()
 
 
@@ -710,6 +730,7 @@ class DeviceMemoryProfiler:
     def current_memory_usage(self) -> float:
         # Return the memory usage in bytes.
         from vllm.platforms import current_platform
+
         if current_platform.is_cuda_alike():
             torch.cuda.reset_peak_memory_stats(self.device)
             mem = torch.cuda.max_memory_allocated(self.device)
@@ -751,7 +772,7 @@ def make_ndarray_with_pad(
     padded_x = np.full((len(x), max_len), pad, dtype=dtype)
     for ind, blocktb in enumerate(x):
         assert len(blocktb) <= max_len
-        padded_x[ind, :len(blocktb)] = blocktb
+        padded_x[ind, : len(blocktb)] = blocktb
 
     return padded_x
 
@@ -815,8 +836,9 @@ def is_list_of(
     assert_never(check)
 
 
-JSONTree = Union[Dict[str, "JSONTree[T]"], List["JSONTree[T]"],
-                 Tuple["JSONTree[T]", ...], T]
+JSONTree = Union[
+    Dict[str, "JSONTree[T]"], List["JSONTree[T]"], Tuple["JSONTree[T]", ...], T
+]
 """A nested JSON structure where the leaves need not be JSON-serializable."""
 
 
@@ -824,32 +846,28 @@ JSONTree = Union[Dict[str, "JSONTree[T]"], List["JSONTree[T]"],
 def json_map_leaves(
     func: Callable[[T], U],
     value: Dict[str, JSONTree[T]],
-) -> Dict[str, JSONTree[U]]:
-    ...
+) -> Dict[str, JSONTree[U]]: ...
 
 
 @overload
 def json_map_leaves(
     func: Callable[[T], U],
     value: List[JSONTree[T]],
-) -> List[JSONTree[U]]:
-    ...
+) -> List[JSONTree[U]]: ...
 
 
 @overload
 def json_map_leaves(
     func: Callable[[T], U],
     value: Tuple[JSONTree[T], ...],
-) -> Tuple[JSONTree[U], ...]:
-    ...
+) -> Tuple[JSONTree[U], ...]: ...
 
 
 @overload
 def json_map_leaves(
     func: Callable[[T], U],
     value: JSONTree[T],
-) -> JSONTree[U]:
-    ...
+) -> JSONTree[U]: ...
 
 
 def json_map_leaves(func: Callable[[T], U], value: JSONTree[T]) -> JSONTree[U]:
@@ -888,6 +906,7 @@ def init_cached_hf_modules() -> None:
     Lazy initialization of the Hugging Face modules.
     """
     from transformers.dynamic_module_utils import init_hf_modules
+
     init_hf_modules()
 
 
@@ -931,8 +950,8 @@ def find_nccl_library() -> str:
     # manually load the nccl library
     if so_file:
         logger.info(
-            "Found nccl from environment variable VLLM_NCCL_SO_PATH=%s",
-            so_file)
+            "Found nccl from environment variable VLLM_NCCL_SO_PATH=%s", so_file
+        )
     else:
         if torch.version.cuda is not None:
             so_file = "libnccl.so.2"
@@ -986,12 +1005,14 @@ def enable_trace_function_call_for_thread(vllm_config: "VllmConfig") -> None:
         tmp_dir = tempfile.gettempdir()
         # add username to tmp_dir to avoid permission issues
         tmp_dir = os.path.join(tmp_dir, getpass.getuser())
-        filename = (f"VLLM_TRACE_FUNCTION_for_process_{os.getpid()}"
-                    f"_thread_{threading.get_ident()}_"
-                    f"at_{datetime.datetime.now()}.log").replace(" ", "_")
-        log_path = os.path.join(tmp_dir, "vllm",
-                                f"vllm-instance-{vllm_config.instance_id}",
-                                filename)
+        filename = (
+            f"VLLM_TRACE_FUNCTION_for_process_{os.getpid()}"
+            f"_thread_{threading.get_ident()}_"
+            f"at_{datetime.datetime.now()}.log"
+        ).replace(" ", "_")
+        log_path = os.path.join(
+            tmp_dir, "vllm", f"vllm-instance-{vllm_config.instance_id}", filename
+        )
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         enable_trace_function_call(log_path)
 
@@ -1002,7 +1023,7 @@ def identity(value: T, **kwargs) -> T:
     return value
 
 
-F = TypeVar('F', bound=Callable[..., Any])
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 def deprecate_args(
@@ -1021,18 +1042,17 @@ def deprecate_args(
             inspect.Parameter.POSITIONAL_ONLY,
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
         )
-        pos_kws = [
-            kw for kw, param in params.items() if param.kind in pos_types
-        ]
+        pos_kws = [kw for kw, param in params.items() if param.kind in pos_types]
 
         @wraps(fn)
         def inner(*args, **kwargs):
             if is_deprecated():
-                deprecated_args = pos_kws[start_index:len(args)]
+                deprecated_args = pos_kws[start_index : len(args)]
                 if deprecated_args:
                     msg = (
                         f"The positional arguments {deprecated_args} are "
-                        "deprecated and will be removed in a future update.")
+                        "deprecated and will be removed in a future update."
+                    )
                     if additional_message is not None:
                         msg += f" {additional_message}"
 
@@ -1067,7 +1087,8 @@ def deprecate_kwargs(
                 if deprecated_kwargs:
                     msg = (
                         f"The keyword arguments {deprecated_kwargs} are "
-                        "deprecated and will be removed in a future update.")
+                        "deprecated and will be removed in a future update."
+                    )
                     if additional_message is not None:
                         msg += f" {additional_message}"
 
@@ -1084,8 +1105,7 @@ def deprecate_kwargs(
 
 
 @lru_cache(maxsize=8)
-def _cuda_device_count_stateless(
-        cuda_visible_devices: Optional[str] = None) -> int:
+def _cuda_device_count_stateless(cuda_visible_devices: Optional[str] = None) -> int:
     # Note: cuda_visible_devices is not used, but we keep it as an argument for
     # LRU Cache purposes.
 
@@ -1097,13 +1117,17 @@ def _cuda_device_count_stateless(
     import torch.version
 
     from vllm.platforms import current_platform
+
     if not torch.cuda._is_compiled():
         return 0
     if current_platform.is_rocm():
         # ROCm uses amdsmi instead of nvml for stateless device count
         # This requires a sufficiently modern version of Torch 2.4.0
-        raw_count = torch.cuda._device_count_amdsmi() if (hasattr(
-            torch.cuda, "_device_count_amdsmi")) else -1
+        raw_count = (
+            torch.cuda._device_count_amdsmi()
+            if (hasattr(torch.cuda, "_device_count_amdsmi"))
+            else -1
+        )
     else:
         raw_count = torch.cuda._device_count_nvml()
     r = torch._C._cuda_getDeviceCount() if raw_count < 0 else raw_count
@@ -1130,7 +1154,9 @@ def cuda_is_initialized() -> bool:
     return torch.cuda.is_initialized()
 
 
-def weak_bind(bound_method: Callable[..., Any], ) -> Callable[..., None]:
+def weak_bind(
+    bound_method: Callable[..., Any],
+) -> Callable[..., None]:
     """Make an instance method that weakly references
     its associated instance and no-ops once that
     instance is collected."""
@@ -1144,7 +1170,7 @@ def weak_bind(bound_method: Callable[..., Any], ) -> Callable[..., None]:
     return weak_bound
 
 
-#From: https://stackoverflow.com/a/4104188/2749989
+# From: https://stackoverflow.com/a/4104188/2749989
 def run_once(f: Callable[P, None]) -> Callable[P, None]:
 
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> None:
@@ -1164,8 +1190,9 @@ class StoreBoolean(argparse.Action):
         elif values.lower() == "false":
             setattr(namespace, self.dest, False)
         else:
-            raise ValueError(f"Invalid boolean value: {values}. "
-                             "Expected 'true' or 'false'.")
+            raise ValueError(
+                f"Invalid boolean value: {values}. " "Expected 'true' or 'false'."
+            )
 
 
 class SortedHelpFormatter(argparse.HelpFormatter):
@@ -1181,31 +1208,30 @@ class FlexibleArgumentParser(argparse.ArgumentParser):
 
     def __init__(self, *args, **kwargs):
         # Set the default 'formatter_class' to SortedHelpFormatter
-        if 'formatter_class' not in kwargs:
-            kwargs['formatter_class'] = SortedHelpFormatter
+        if "formatter_class" not in kwargs:
+            kwargs["formatter_class"] = SortedHelpFormatter
         super().__init__(*args, **kwargs)
 
     def parse_args(self, args=None, namespace=None):
         if args is None:
             args = sys.argv[1:]
 
-        if '--config' in args:
+        if "--config" in args:
             args = self._pull_args_from_config(args)
 
         # Convert underscores to dashes and vice versa in argument names
         processed_args = []
         for arg in args:
-            if arg.startswith('--'):
-                if '=' in arg:
-                    key, value = arg.split('=', 1)
-                    key = '--' + key[len('--'):].replace('_', '-')
-                    processed_args.append(f'{key}={value}')
+            if arg.startswith("--"):
+                if "=" in arg:
+                    key, value = arg.split("=", 1)
+                    key = "--" + key[len("--") :].replace("_", "-")
+                    processed_args.append(f"{key}={value}")
                 else:
-                    processed_args.append('--' +
-                                          arg[len('--'):].replace('_', '-'))
-            elif arg.startswith('-O') and arg != '-O' and len(arg) == 2:
+                    processed_args.append("--" + arg[len("--") :].replace("_", "-"))
+            elif arg.startswith("-O") and arg != "-O" and len(arg) == 2:
                 # allow -O flag to be used without space, e.g. -O3
-                processed_args.append('-O')
+                processed_args.append("-O")
                 processed_args.append(arg[2:])
             else:
                 processed_args.append(arg)
@@ -1246,13 +1272,14 @@ class FlexibleArgumentParser(argparse.ArgumentParser):
         this way the order of priorities is maintained when these are args
         parsed by super().
         """
-        assert args.count(
-            '--config') <= 1, "More than one config file specified!"
+        assert args.count("--config") <= 1, "More than one config file specified!"
 
-        index = args.index('--config')
+        index = args.index("--config")
         if index == len(args) - 1:
-            raise ValueError("No config file specified! \
-                             Please check your command-line arguments.")
+            raise ValueError(
+                "No config file specified! \
+                             Please check your command-line arguments."
+            )
 
         file_path = args[index + 1]
 
@@ -1268,12 +1295,13 @@ class FlexibleArgumentParser(argparse.ArgumentParser):
             if index == 1:
                 raise ValueError(
                     "No model_tag specified! Please check your command-line"
-                    " arguments.")
-            args = [args[0]] + [
-                args[1]
-            ] + config_args + args[2:index] + args[index + 2:]
+                    " arguments."
+                )
+            args = (
+                [args[0]] + [args[1]] + config_args + args[2:index] + args[index + 2 :]
+            )
         else:
-            args = [args[0]] + config_args + args[1:index] + args[index + 2:]
+            args = [args[0]] + config_args + args[1:index] + args[index + 2 :]
 
         return args
 
@@ -1292,11 +1320,13 @@ class FlexibleArgumentParser(argparse.ArgumentParser):
 
         """
 
-        extension: str = file_path.split('.')[-1]
-        if extension not in ('yaml', 'yml'):
+        extension: str = file_path.split(".")[-1]
+        if extension not in ("yaml", "yml"):
             raise ValueError(
                 "Config file must be of a yaml/yml type.\
-                              %s supplied", extension)
+                              %s supplied",
+                extension,
+            )
 
         # only expecting a flat dictionary of atomic types
         processed_args: List[str] = []
@@ -1308,27 +1338,27 @@ class FlexibleArgumentParser(argparse.ArgumentParser):
         except Exception as ex:
             logger.error(
                 "Unable to read the config file at %s. \
-                Make sure path is correct", file_path)
+                Make sure path is correct",
+                file_path,
+            )
             raise ex
 
         store_boolean_arguments = [
-            action.dest for action in self._actions
-            if isinstance(action, StoreBoolean)
+            action.dest for action in self._actions if isinstance(action, StoreBoolean)
         ]
 
         for key, value in config.items():
             if isinstance(value, bool) and key not in store_boolean_arguments:
                 if value:
-                    processed_args.append('--' + key)
+                    processed_args.append("--" + key)
             else:
-                processed_args.append('--' + key)
+                processed_args.append("--" + key)
                 processed_args.append(str(value))
 
         return processed_args
 
 
-async def _run_task_with_lock(task: Callable, lock: asyncio.Lock, *args,
-                              **kwargs):
+async def _run_task_with_lock(task: Callable, lock: asyncio.Lock, *args, **kwargs):
     """Utility function to run async task in a lock"""
     async with lock:
         return await task(*args, **kwargs)
@@ -1351,19 +1381,26 @@ def supports_kw(
     param_val = params.get(kw_name)
 
     # Types where the it may be valid, i.e., explicitly defined & nonvariadic
-    passable_kw_types = set((inspect.Parameter.POSITIONAL_ONLY,
-                             inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                             inspect.Parameter.KEYWORD_ONLY))
+    passable_kw_types = set(
+        (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+    )
 
     if param_val:
         is_sig_param = param_val.kind in passable_kw_types
         # We want kwargs only, but this is passable as a positional arg
-        if (requires_kw_only and is_sig_param
-                and param_val.kind != inspect.Parameter.KEYWORD_ONLY):
+        if (
+            requires_kw_only
+            and is_sig_param
+            and param_val.kind != inspect.Parameter.KEYWORD_ONLY
+        ):
             return False
-        if ((requires_kw_only
-             and param_val.kind == inspect.Parameter.KEYWORD_ONLY)
-                or (not requires_kw_only and is_sig_param)):
+        if (requires_kw_only and param_val.kind == inspect.Parameter.KEYWORD_ONLY) or (
+            not requires_kw_only and is_sig_param
+        ):
             return True
 
     # If we're okay with var-kwargs, it's supported as long as
@@ -1373,8 +1410,10 @@ def supports_kw(
         # mapping, but it wraps an ordered dict, and they appear in order.
         # Ref: https://docs.python.org/3/library/inspect.html#inspect.Signature.parameters
         last_param = params[next(reversed(params))]  # type: ignore
-        return (last_param.kind == inspect.Parameter.VAR_KEYWORD
-                and last_param.name != kw_name)
+        return (
+            last_param.kind == inspect.Parameter.VAR_KEYWORD
+            and last_param.name != kw_name
+        )
     return False
 
 
@@ -1454,10 +1493,12 @@ def get_allowed_kwarg_only_overrides(
     filtered_overrides = {
         kwarg_name: val
         for kwarg_name, val in overrides.items()
-        if supports_kw(callable,
-                       kwarg_name,
-                       requires_kw_only=requires_kw_only,
-                       allow_var_kwargs=allow_var_kwargs)
+        if supports_kw(
+            callable,
+            kwarg_name,
+            requires_kw_only=requires_kw_only,
+            allow_var_kwargs=allow_var_kwargs,
+        )
     }
 
     # If anything is dropped, log a warning
@@ -1466,11 +1507,15 @@ def get_allowed_kwarg_only_overrides(
         if requires_kw_only:
             logger.warning(
                 "The following intended overrides are not keyword-only args "
-                "and and will be dropped: %s", dropped_keys)
+                "and and will be dropped: %s",
+                dropped_keys,
+            )
         else:
             logger.warning(
                 "The following intended overrides are not keyword args "
-                "and and will be dropped: %s", dropped_keys)
+                "and and will be dropped: %s",
+                dropped_keys,
+            )
 
     return filtered_overrides
 
@@ -1588,6 +1633,7 @@ def weak_ref_tensors(
 def is_in_doc_build() -> bool:
     try:
         from sphinx.ext.autodoc.mock import _MockModule
+
         return isinstance(torch, _MockModule)
     except ModuleNotFoundError:
         return False
@@ -1620,7 +1666,8 @@ def get_vllm_optional_dependencies():
 
     return {
         extra: [
-            re.split(r";|>=|<=|==", req)[0] for req in requirements
+            re.split(r";|>=|<=|==", req)[0]
+            for req in requirements
             if req.endswith(f'extra == "{extra}"')
         ]
         for extra in extras
@@ -1812,8 +1859,10 @@ class PlaceholderModule(_PlaceholderBase):
 
             raise exc
 
-        raise AssertionError("PlaceholderModule should not be used "
-                             "when the original module can be imported")
+        raise AssertionError(
+            "PlaceholderModule should not be used "
+            "when the original module can be imported"
+        )
 
 
 class _PlaceholderModuleAttr(_PlaceholderBase):
@@ -1826,14 +1875,15 @@ class _PlaceholderModuleAttr(_PlaceholderBase):
         self.__attr_path = attr_path
 
     def placeholder_attr(self, attr_path: str):
-        return _PlaceholderModuleAttr(self.__module,
-                                      f"{self.__attr_path}.{attr_path}")
+        return _PlaceholderModuleAttr(self.__module, f"{self.__attr_path}.{attr_path}")
 
     def __getattr__(self, key: str):
         getattr(self.__module, f"{self.__attr_path}.{key}")
 
-        raise AssertionError("PlaceholderModule should not be used "
-                             "when the original module can be imported")
+        raise AssertionError(
+            "PlaceholderModule should not be used "
+            "when the original module can be imported"
+        )
 
 
 # create a library to hold the custom op
@@ -1868,21 +1918,24 @@ def direct_register_custom_op(
 
     if not supports_custom_op():
         from vllm.platforms import current_platform
+
         assert not current_platform.is_cuda_alike(), (
             "cuda platform needs torch>=2.4 to support custom op, "
             "chances are you are using an old version of pytorch "
             "or a custom build of pytorch. It is recommended to "
             "use vLLM in a fresh new environment and let it install "
-            "the required dependencies.")
+            "the required dependencies."
+        )
         return
 
     import torch.library
+
     if hasattr(torch.library, "infer_schema"):
-        schema_str = torch.library.infer_schema(op_func,
-                                                mutates_args=mutates_args)
+        schema_str = torch.library.infer_schema(op_func, mutates_args=mutates_args)
     else:
         # for pytorch 2.4
         import torch._custom_op.impl
+
         schema_str = torch._custom_op.impl.infer_schema(op_func, mutates_args)
     my_lib = target_lib or vllm_lib
     my_lib.define(op_name + schema_str)
@@ -1928,6 +1981,7 @@ def kill_process_tree(pid: int):
 @dataclass
 class MemorySnapshot:
     """Memory snapshot."""
+
     torch_peak_in_bytes: int = 0
     torch_memory_in_bytes: int = 0
     timestamp: float = 0.0
@@ -1942,17 +1996,17 @@ class MemorySnapshot:
     def __sub__(self, other: "MemorySnapshot") -> "MemorySnapshot":
         """support a - b"""
         return MemorySnapshot(
-            torch_peak_in_bytes=self.torch_peak_in_bytes -
-            other.torch_peak_in_bytes,
-            torch_memory_in_bytes=self.torch_memory_in_bytes -
-            other.torch_memory_in_bytes,
-            timestamp=self.timestamp - other.timestamp)
+            torch_peak_in_bytes=self.torch_peak_in_bytes - other.torch_peak_in_bytes,
+            torch_memory_in_bytes=self.torch_memory_in_bytes
+            - other.torch_memory_in_bytes,
+            timestamp=self.timestamp - other.timestamp,
+        )
 
 
 @dataclass
 class MemoryProfilingResult:
-    """Memory profiling result.
-    """  # noqa
+    """Memory profiling result."""  # noqa
+
     baseline_memory_in_bytes: int = 0
     non_kv_cache_memory_in_bytes: int = 0
     torch_peak_increase_in_bytes: int = 0
@@ -2017,7 +2071,7 @@ def memory_profiling(
 
     (c.) is tricky. We measure the total memory used in this GPU (`torch.cuda.mem_get_info()[1] - torch.cuda.mem_get_info()[0]`),
     subtract the baseline memory, the memory used by the model weights, and diff of `torch.cuda.memory_reserved()`.
-    """ # noqa
+    """  # noqa
     torch.cuda.reset_peak_memory_stats()
 
     result = MemoryProfilingResult()
@@ -2037,8 +2091,9 @@ def memory_profiling(
 
     diff = result.after_profile - result.before_profile
     result.torch_peak_increase_in_bytes = diff.torch_peak_in_bytes
-    current_cuda_memory_bytes = torch.cuda.mem_get_info(
-    )[1] - torch.cuda.mem_get_info()[0]
+    current_cuda_memory_bytes = (
+        torch.cuda.mem_get_info()[1] - torch.cuda.mem_get_info()[0]
+    )
     result.non_torch_increase_in_bytes = current_cuda_memory_bytes - baseline_memory_in_bytes - weights_memory_in_bytes - diff.torch_memory_in_bytes  # noqa
     result.profile_time = diff.timestamp
     result.non_kv_cache_memory_in_bytes = result.non_torch_increase_in_bytes + result.torch_peak_increase_in_bytes + result.weights_memory_in_bytes  # noqa
@@ -2051,14 +2106,16 @@ def set_ulimit(target_soft_limit=65535):
 
     if current_soft < target_soft_limit:
         try:
-            resource.setrlimit(resource_type,
-                               (target_soft_limit, current_hard))
+            resource.setrlimit(resource_type, (target_soft_limit, current_hard))
         except ValueError as e:
             logger.warning(
                 "Found ulimit of %s and failed to automatically increase"
                 "with error %s. This can cause fd limit errors like"
                 "`OSError: [Errno 24] Too many open files`. Consider "
-                "increasing with ulimit -n", current_soft, e)
+                "increasing with ulimit -n",
+                current_soft,
+                e,
+            )
 
 
 # Adapted from: https://github.com/sgl-project/sglang/blob/v0.4.1/python/sglang/utils.py#L28 # noqa: E501
@@ -2107,8 +2164,8 @@ def make_zmq_socket(
 
 @contextlib.contextmanager
 def zmq_socket_ctx(
-        path: str,
-        type: Any) -> Iterator[zmq.Socket]:  # type: ignore[name-defined]
+    path: str, type: Any
+) -> Iterator[zmq.Socket]:  # type: ignore[name-defined]
     """Context manager for a ZMQ socket"""
 
     ctx = zmq.Context(io_threads=2)  # type: ignore[attr-defined]
@@ -2123,14 +2180,18 @@ def zmq_socket_ctx(
 
 
 def _check_multiproc_method():
-    if (cuda_is_initialized()
-            and os.environ.get("VLLM_WORKER_MULTIPROC_METHOD") != "spawn"):
-        logger.warning("CUDA was previously initialized. We must use "
-                       "the `spawn` multiprocessing start method. Setting "
-                       "VLLM_WORKER_MULTIPROC_METHOD to 'spawn'. "
-                       "See https://docs.vllm.ai/en/latest/getting_started/"
-                       "troubleshooting.html#python-multiprocessing "
-                       "for more information.")
+    if (
+        cuda_is_initialized()
+        and os.environ.get("VLLM_WORKER_MULTIPROC_METHOD") != "spawn"
+    ):
+        logger.warning(
+            "CUDA was previously initialized. We must use "
+            "the `spawn` multiprocessing start method. Setting "
+            "VLLM_WORKER_MULTIPROC_METHOD to 'spawn'. "
+            "See https://docs.vllm.ai/en/latest/getting_started/"
+            "troubleshooting.html#python-multiprocessing "
+            "for more information."
+        )
         os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 
@@ -2141,8 +2202,8 @@ def get_mp_context():
 
 
 def bind_kv_cache(
-        ctx: Dict[str, Any],
-        kv_cache: List[List[torch.Tensor]],  # [virtual_engine][layer_index]
+    ctx: Dict[str, Any],
+    kv_cache: List[List[torch.Tensor]],  # [virtual_engine][layer_index]
 ) -> None:
     # Bind the kv_cache tensor to Attention modules, similar to
     # ctx[layer_name].kv_cache[ve]=kv_cache[ve][extract_layer_index(layer_name)]
@@ -2156,18 +2217,18 @@ def bind_kv_cache(
     #    tensor
     from vllm.attention import AttentionType
     from vllm.model_executor.models.utils import extract_layer_index
+
     layer_need_kv_cache = [
-        layer_name for layer_name in ctx
-        if ctx[layer_name].attn_type in (AttentionType.DECODER,
-                                         AttentionType.ENCODER_DECODER)
+        layer_name
+        for layer_name in ctx
+        if ctx[layer_name].attn_type
+        in (AttentionType.DECODER, AttentionType.ENCODER_DECODER)
     ]
     layer_index_sorted = sorted(
-        set(
-            extract_layer_index(layer_name)
-            for layer_name in layer_need_kv_cache))
+        set(extract_layer_index(layer_name) for layer_name in layer_need_kv_cache)
+    )
     for layer_name in layer_need_kv_cache:
-        kv_cache_idx = layer_index_sorted.index(
-            extract_layer_index(layer_name))
+        kv_cache_idx = layer_index_sorted.index(extract_layer_index(layer_name))
         forward_ctx = ctx[layer_name]
         assert len(forward_ctx.kv_cache) == len(kv_cache)
         for ve, ve_kv_cache in enumerate(kv_cache):

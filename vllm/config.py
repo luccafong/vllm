@@ -1293,24 +1293,24 @@ class ParallelConfig:
 
             from vllm.executor import ray_utils
             backend = "mp"
-            ray_found = ray_utils.ray_is_available()
-            if (current_platform.is_cuda()
-                    and cuda_device_count_stateless() < self.world_size):
-                if not ray_found:
-                    raise ValueError("Unable to load Ray which is "
-                                     "required for multi-node inference, "
-                                     "please install Ray with `pip install "
-                                     "ray`.") from ray_utils.ray_import_err
-                backend = "ray"
-            elif ray_found:
-                if self.placement_group:
-                    backend = "ray"
-                else:
-                    from ray import is_initialized as ray_is_initialized
-                    if ray_is_initialized():
-                        from ray.util import get_current_placement_group
-                        if get_current_placement_group():
-                            backend = "ray"
+            # ray_found = ray_utils.ray_is_available()
+            # if (current_platform.is_cuda()
+            #         and cuda_device_count_stateless() < self.world_size):
+            #     if not ray_found:
+            #         raise ValueError("Unable to load Ray which is "
+            #                          "required for multi-node inference, "
+            #                          "please install Ray with `pip install "
+            #                          "ray`.") from ray_utils.ray_import_err
+            #     backend = "ray"
+            # elif ray_found:
+            #     if self.placement_group:
+            #         backend = "ray"
+            #     else:
+            #         from ray import is_initialized as ray_is_initialized
+            #         if ray_is_initialized():
+            #             from ray.util import get_current_placement_group
+            #             if get_current_placement_group():
+            #                 backend = "ray"
             self.distributed_executor_backend = backend
             logger.info("Defaulting to use %s for distributed inference",
                         backend)
@@ -2976,7 +2976,7 @@ class VllmConfig:
                                             init=True)  # type: ignore
     instance_id: str = ""
     
-    is_host: bool = False
+    multi_host_rank: int = 0
     pipeline_leader_connect_timeout_secs: int = 600
     leader_host_addr: str = "localhost"
     leader_host_port: int = 0
