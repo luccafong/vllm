@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from multiprocessing import Queue
 from multiprocessing.connection import wait
 from multiprocessing.process import BaseProcess
-from typing import (Any, Callable, Dict, Generic, List, Optional, TextIO,
-                    TypeVar, Union)
+from typing import Any, Callable, Dict, Generic, List, Optional, TextIO, TypeVar, Union
 
 import torch
+
+from vllm.distributed import broadcast_pp_object, get_last_pp_group_rank
 
 from vllm.logger import init_logger
 from vllm.triton_utils.importing import HAS_TRITON
@@ -21,13 +22,13 @@ if HAS_TRITON:
 
 logger = init_logger(__name__)
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 _TERMINATE = "TERMINATE"  # sentinel
 
 # ANSI color codes
-CYAN = '\033[1;36m'
-RESET = '\033[0;0m'
+CYAN = "\033[1;36m"
+RESET = "\033[0;0m"
 
 JOIN_TIMEOUT_S = 2
 
@@ -60,8 +61,7 @@ class ResultFuture(threading.Event, Generic[T]):
         return self.result.value  # type: ignore[return-value]
 
 
-def _set_future_result(future: Union[ResultFuture, asyncio.Future],
-                       result: Result):
+def _set_future_result(future: Union[ResultFuture, asyncio.Future], result: Result):
     if isinstance(future, ResultFuture):
         future.set_result(result)
         return
@@ -89,8 +89,8 @@ class ResultHandler(threading.Thread):
         for task_id, future in self.tasks.items():
             _set_future_result(
                 future,
-                Result(task_id=task_id,
-                       exception=ChildProcessError("worker died")))
+                Result(task_id=task_id, exception=ChildProcessError("worker died")),
+            )
 
     def close(self):
         self.result_queue.put(_TERMINATE)
@@ -99,8 +99,9 @@ class ResultHandler(threading.Thread):
 class WorkerMonitor(threading.Thread):
     """Monitor worker status (in background thread)"""
 
-    def __init__(self, workers: List['ProcessWorkerWrapper'],
-                 result_handler: ResultHandler):
+    def __init__(
+        self, workers: List["ProcessWorkerWrapper"], result_handler: ResultHandler
+    ):
         super().__init__(daemon=True)
         self.workers = workers
         self.result_handler = result_handler
@@ -118,8 +119,12 @@ class WorkerMonitor(threading.Thread):
                 if process.sentinel in dead_sentinels:
                     process.join(JOIN_TIMEOUT_S)
                 if process.exitcode is not None and process.exitcode != 0:
-                    logger.error("Worker %s pid %s died, exit code: %s",
-                                 process.name, process.pid, process.exitcode)
+                    logger.error(
+                        "Worker %s pid %s died, exit code: %s",
+                        process.name,
+                        process.pid,
+                        process.exitcode,
+                    )
             # Cleanup any remaining workers
             if logger:
                 logger.info("Killing local vLLM worker processes")
@@ -146,8 +151,9 @@ class ProcessWorkerWrapper:
     """Local process wrapper for vllm.worker.Worker,
     for handling single-node multi-GPU tensor parallel."""
 
-    def __init__(self, result_handler: ResultHandler,
-                 worker_factory: Callable[[], Any]) -> None:
+    def __init__(
+        self, result_handler: ResultHandler, worker_factory: Callable[[], Any]
+    ) -> None:
         self.mp = get_mp_context()
         self._task_queue = self.mp.Queue()
         self.result_queue = result_handler.result_queue
@@ -160,12 +166,14 @@ class ProcessWorkerWrapper:
                 task_queue=self._task_queue,
                 result_queue=self.result_queue,
             ),
-            daemon=True)
+            daemon=True,
+        )
 
         self.process.start()
 
-    def _enqueue_task(self, future: Union[ResultFuture, asyncio.Future],
-                      method: str, args, kwargs):
+    def _enqueue_task(
+        self, future: Union[ResultFuture, asyncio.Future], method: str, args, kwargs
+    ):
         task_id = uuid.uuid4()
         self.tasks[task_id] = future
         try:
@@ -233,10 +241,11 @@ def _run_worker_process(
             except BaseException as e:
                 logger.exception(
                     "Exception in worker %s while processing method %s.",
-                    process_name, method)
+                    process_name,
+                    method,
+                )
                 exception = e
-            result_queue.put(
-                Result(task_id=task_id, value=output, exception=exception))
+            result_queue.put(Result(task_id=task_id, value=output, exception=exception))
     except KeyboardInterrupt:
         pass
     except Exception:
@@ -257,7 +266,7 @@ def _add_prefix(file: TextIO, worker_name: str, pid: int) -> None:
         if file.start_new_line:  # type: ignore[attr-defined]
             file_write(prefix)
         idx = 0
-        while (next_idx := s.find('\n', idx)) != -1:
+        while (next_idx := s.find("\n", idx)) != -1:
             next_idx += 1
             file_write(s[idx:next_idx])
             if next_idx == len(s):
@@ -273,8 +282,8 @@ def _add_prefix(file: TextIO, worker_name: str, pid: int) -> None:
 
 
 def set_multiprocessing_worker_envs(parallel_config):
-    """ Set up environment variables that should be used when there are workers
-    in a multiprocessing environment. This should be called by the parent 
+    """Set up environment variables that should be used when there are workers
+    in a multiprocessing environment. This should be called by the parent
     process before worker processes are created"""
 
     _check_multiproc_method()
@@ -286,14 +295,17 @@ def set_multiprocessing_worker_envs(parallel_config):
     # impact on performance. The contention is amplified when running in a
     # container where CPU limits can cause throttling.
     default_omp_num_threads = 1
-    if "OMP_NUM_THREADS" not in os.environ and (
-            current_parallelism :=
-            torch.get_num_threads()) > default_omp_num_threads:
+    if (
+        "OMP_NUM_THREADS" not in os.environ
+        and (current_parallelism := torch.get_num_threads()) > default_omp_num_threads
+    ):
         logger.warning(
             "Reducing Torch parallelism from %d threads to %d to avoid "
             "unnecessary CPU contention. Set OMP_NUM_THREADS in the "
             "external environment to tune this value as needed.",
-            current_parallelism, default_omp_num_threads)
+            current_parallelism,
+            default_omp_num_threads,
+        )
         os.environ["OMP_NUM_THREADS"] = str(default_omp_num_threads)
         torch.set_num_threads(default_omp_num_threads)
 

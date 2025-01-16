@@ -5,15 +5,21 @@ import socket
 import time
 from collections import defaultdict
 from functools import partial
+from re import S
 from typing import Any, List, Optional, Tuple
 
 import torch
-
 from torch.distributed.elastic.agent.server.api import _RoleInstanceInfo
 
 from torch.distributed.elastic.rendezvous import RendezvousParameters
 
 from torch.distributed.elastic.rendezvous.utils import parse_rendezvous_endpoint
+
+from vllm.distributed import (
+    broadcast_driver_object,
+    broadcast_pp_object,
+    get_last_pp_group_rank,
+)
 
 from vllm.executor.distributed_gpu_executor import (  # yapf: disable
     DistributedGPUExecutor,
@@ -232,6 +238,7 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
 
         # Create the parallel GPU workers.
         nnodes = world_size // self.local_world_size
+        self.nnodes = nnodes
         tensor_parallel_size = self.parallel_config.tensor_parallel_size
         # Set multiprocessing envs that are common to V0 and V1
         set_multiprocessing_worker_envs(self.parallel_config)
@@ -258,8 +265,9 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
         # broadcasted to.
         self.non_driver_workers: List[ProcessWorkerWrapper] = []
         self.store: Optional[torch.distributed.Store] = None
-        if self.use_rdzv and nnodes > 1:
-            self._wait_for_host()
+        if self.use_rdzv:
+            if self.nnodes > 1:
+                self._wait_for_host()
             self.rdzv_datas = self._init_rdzv(
                 self.vllm_config.instance_id, nnodes, self.local_world_size
             )
@@ -270,7 +278,7 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
         else:
             result_handler = ResultHandler()
             if self.use_rdzv and self.vllm_config.multi_host_rank > 0:
-                worker_start_rank = 0  # no driver worker if using rdzv and not is host
+                worker_start_rank = 1  # no driver worker if using rdzv and not is host
             else:
                 worker_start_rank = 1
             for rank in range(worker_start_rank, self.local_world_size):
@@ -293,10 +301,7 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
                     ),
                 )
                 self.workers.append(worker)
-                if (
-                    rank % tensor_parallel_size == 0
-                    and self.vllm_config.multi_host_rank == 0
-                ):
+                if rank % tensor_parallel_size == 0:
                     self.tp_driver_workers.append(worker)
                 else:
                     self.non_driver_workers.append(worker)
@@ -307,14 +312,20 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
 
         # Set up signal handlers to shutdown the executor cleanly
         # sometimes gc does not work well
-        if not self.use_rdzv or self.vllm_config.multi_host_rank == 0:
-            self.driver_worker = self._create_worker(
-                distributed_init_method=distributed_init_method,
-                rdzv_data=self.rdzv_datas[0] if self.rdzv_datas else None,
-                # store=self.store,
-            )
-        else:
-            self.driver_worker = None
+        rdzv_local_driver_data = (
+            self.rdzv_datas[0] if self.rdzv_datas is not None else None
+        )
+        logger.info(f"{rdzv_local_driver_data=}")
+        self.driver_worker = self._create_worker(
+            distributed_init_method=distributed_init_method,
+            rdzv_data=rdzv_local_driver_data,
+            rank=(
+                rdzv_local_driver_data.global_rank
+                if rdzv_local_driver_data is not None
+                else 0
+            ),
+            # store=self.store,
+        )
         self._run_workers("init_device")
         self._run_workers(
             "load_model",
@@ -337,15 +348,15 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
 
         cuda_device_count = cuda_device_count_stateless()
         # Use confusing message for more common TP-only case.
-        assert tensor_parallel_size <= cuda_device_count, (
-            f"please set tensor_parallel_size ({tensor_parallel_size}) "
-            f"to less than max local gpu count ({cuda_device_count})"
-        )
+        # assert tensor_parallel_size <= cuda_device_count, (
+        #     f"please set tensor_parallel_size ({tensor_parallel_size}) "
+        #     f"to less than max local gpu count ({cuda_device_count})"
+        # )
 
-        assert world_size <= cuda_device_count, (
-            f"please ensure that world_size ({world_size}) "
-            f"is less than than max local gpu count ({cuda_device_count})"
-        )
+        # assert world_size <= cuda_device_count, (
+        #     f"please ensure that world_size ({world_size}) "
+        #     f"is less than than max local gpu count ({cuda_device_count})"
+        # )
 
     def shutdown(self):
         if (worker_monitor := getattr(self, "worker_monitor", None)) is not None:
@@ -380,7 +391,7 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
 
         if max_concurrent_workers:
             raise NotImplementedError("max_concurrent_workers is not supported yet.")
-
+        logger.info(f"{async_run_tensor_parallel_workers_only=}, {method=}")
         if async_run_tensor_parallel_workers_only:
             # Run only non-driver workers and just return futures.
             return [
@@ -392,8 +403,6 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
         worker_outputs = [
             worker.execute_method(method, *args, **kwargs) for worker in self.workers
         ]
-        if self.driver_worker is None:
-            return [output.get() for output in worker_outputs]
         driver_worker_method = getattr(self.driver_worker, method)
         driver_worker_output = driver_worker_method(*args, **kwargs)
 
@@ -418,20 +427,81 @@ class MultiprocessingGPUExecutorAsync(
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.driver_worker is not None:
-            self.driver_exec_model = make_async(self.driver_worker.execute_model)
-        else:
-            self.driver_exec_model = None
+        self.pp_enabled = (
+            self.vllm_config.parallel_config.pipeline_parallel_size > 1
+        )  # TODO pass in
+        self.pp_lock: Optional[asyncio.Lock] = None
+        self.driver_exec_model = make_async(self.driver_worker.execute_model)
+        if self.vllm_config.multi_host_rank > 0:
+            self.cross_host_sync_loop = asyncio.get_event_loop()
+            self.cross_host_sync_loop.create_task(
+                self.start_tp_driver_loop_for_cross_host()
+            )
+            logger.info(f"continue")
         self.pp_locks: Optional[List[asyncio.Lock]] = None
+
+    async def start_tp_driver_loop_for_cross_host(self) -> None:
+        """Start a non-driver worker loop for cross-host execution.
+
+        This is used for cross-host execution, where the driver worker is
+        responsible for executing the model on the local host, and the remote
+        worker is responsible for executing the model on the remote host.
+        """
+        logger.info("start_non_driver_loop_for_cross_host")
+
+        # with self.current_platform.inference_mode():
+        while True:
+            # TODO: Using dist broadcast for input could cause timeout, we should use MQ to broadcast instead, also pp group is not available for TP=16, we need to create a separate group for it
+
+            logger.info("start broadcast_pp_object")
+            model_input = broadcast_driver_object(None, src=0)
+            logger.info(f"get broadcasted")
+            if model_input is not None:
+                logger.info(f"get broadcasted of the unnone input")
+                await self.execute_model_async(model_input)
+            else:
+                logger.info(f"get broadcasted of the none input")
+                await self.stop_remote_worker_execution_loop_async()
+
+            time.sleep(0.03)
 
     async def _driver_execute_model_async(
         self, execute_model_req: Optional[ExecuteModelRequest] = None
     ) -> List[SamplerOutput]:
-        if self.driver_exec_model is None:
-            raise RuntimeError("non-driver worker does not accept model requests")
-        if not self.tp_driver_workers:
-            return await self.driver_exec_model(execute_model_req)
+        if self.nnodes > 1:
+            if self.vllm_config.multi_host_rank == 0:
+                logger.info(f"broadcast driver input")
+                if execute_model_req is None:
+                    logger.info(f"broadcast driver input of the none input")
+                broadcast_driver_object(execute_model_req, src=0)
+            if self.pp_enabled:
+                if self.pp_lock is None:
+                    self.pp_lock = asyncio.Lock()
+                tasks = [
+                    asyncio.create_task(
+                        _run_task_with_lock(
+                            self.driver_exec_model, self.pp_lock, execute_model_req
+                        )
+                    )
+                ]
+                results = await asyncio.gather(*tasks)
+                result = results[-1]
+            else:
+                result = await self.driver_exec_model(execute_model_req)
 
+            if (
+                self.pp_enabled and result is not None
+            ):  # do not broadcast if result is None when stop_remote_worker_execution_loop_async called
+                logger.info("broadcast the pp output")
+                result = broadcast_pp_object(result, src=get_last_pp_group_rank())
+                logger.info("the pp output returned")
+            return result
+        elif not self.tp_driver_workers:
+            result = await self.driver_exec_model(execute_model_req)
+            logger.info("tp_driver_workers is empty")
+            return result
+        # Legacy code path for Ray
+        # TODO: split the two classes
         if self.pp_locks is None:
             # This locks each pipeline parallel stage so multiple virtual
             # engines can't execute on the same stage at the same time
@@ -441,14 +511,16 @@ class MultiprocessingGPUExecutorAsync(
                 asyncio.Lock()
                 for _ in range(self.parallel_config.pipeline_parallel_size)
             ]
-
-        tasks = [
-            asyncio.create_task(
-                _run_task_with_lock(
-                    self.driver_exec_model, self.pp_locks[0], execute_model_req
+        if self.driver_exec_model is not None:
+            tasks = [
+                asyncio.create_task(
+                    _run_task_with_lock(
+                        self.driver_exec_model, self.pp_locks[0], execute_model_req
+                    )
                 )
-            )
-        ]
+            ]
+        else:
+            tasks = []
         for pp_rank, driver_worker in enumerate(self.tp_driver_workers, start=1):
             tasks.append(
                 asyncio.create_task(

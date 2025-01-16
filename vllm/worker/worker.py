@@ -2,6 +2,7 @@
 
 import gc
 import os
+from logging import log
 from typing import Dict, List, Optional, Set, Tuple, Type, Union
 
 import torch
@@ -64,6 +65,7 @@ class Worker(LocalOrDistributedWorkerBase):
         self.parallel_config.rank = rank
         self.local_rank = local_rank
         self.rank = rank
+        logger.info(f"{self.rank=}")
         self.store = store
         self.distributed_init_method = distributed_init_method
         self.is_driver_worker = is_driver_worker

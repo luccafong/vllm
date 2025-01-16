@@ -274,6 +274,11 @@ class GroupCoordinator:
         return self.ranks[-1]
 
     @property
+    def last_rank_in_group(self):
+        """Return the last rank in group of the last process in the group"""
+        return len(self.ranks) - 1
+
+    @property
     def is_first_rank(self):
         """Return whether the caller is the first process in the group"""
         return self.rank == self.first_rank
@@ -485,12 +490,19 @@ class GroupCoordinator:
         if self.mq_broadcaster is not None:
             assert src == 0, "Message queue broadcaster only supports src=0"
             return self.mq_broadcaster.broadcast_object(obj)
+        logger.info(f"{self.rank_in_group=}, {self.cpu_group=}")
         if self.rank_in_group == src:
+            logger.info(
+                f"broadcast src {self.ranks[src]=}, {self.rank_in_group=}, {torch.distributed.get_process_group_ranks(self.cpu_group)}"
+            )
             torch.distributed.broadcast_object_list(
                 [obj], src=self.ranks[src], group=self.cpu_group
             )
             return obj
         else:
+            logger.info(
+                f"broadcast dest {self.ranks[src]=}, {self.rank_in_group=}, {torch.distributed.get_process_group_ranks(self.cpu_group)}"
+            )
             recv = [None]
             torch.distributed.broadcast_object_list(
                 recv, src=self.ranks[src], group=self.cpu_group
@@ -525,6 +537,9 @@ class GroupCoordinator:
             "as the current rank."
         )
 
+        # logger.info(
+        #     f"send tensor  dst={dst}, sdst_ranks={self.ranks[dst]}, all_gather_group ranks {torch.distributed.get_process_group_ranks(self.cpu_group)}"
+        # )
         # Serialize object to tensor and get the size as well
         object_tensor = torch.frombuffer(pickle.dumps(obj), dtype=torch.uint8)
 
@@ -672,7 +687,10 @@ class GroupCoordinator:
         # Bypass the function if we are using only 1 GPU.
         if not torch.distributed.is_initialized() or self.world_size == 1:
             return tensor_dict
-
+        if all_gather_group is not None:
+            logger.info(
+                f"object {dst=}, all_gather_group ranks {all_gather_group.ranks}"
+            )
         all_gather_size = 1 if all_gather_group is None else all_gather_group.world_size
         all_gather_rank = (
             0 if all_gather_group is None else all_gather_group.rank_in_group
@@ -693,6 +711,7 @@ class GroupCoordinator:
         # `metadata_list` lives in CPU memory.
         # `send_object_list` has serialization & deserialization,
         # all happening on CPU. Therefore, we can use the CPU group.
+        # logger.info(f"object {dst=}")
         self.send_object(metadata_list, dst=dst)
         for tensor in tensor_list:
             if tensor.numel() == 0:
@@ -724,7 +743,10 @@ class GroupCoordinator:
         # Bypass the function if we are using only 1 GPU.
         if not torch.distributed.is_initialized() or self.world_size == 1:
             return None
-
+        if all_gather_group is not None:
+            logger.info(
+                f"object {src=}, all_gather_group ranks {all_gather_group.ranks}"
+            )
         all_gather_size = 1 if all_gather_group is None else all_gather_group.world_size
         all_gather_rank = (
             0 if all_gather_group is None else all_gather_group.rank_in_group
@@ -735,6 +757,10 @@ class GroupCoordinator:
 
         if src is None:
             src = (self.rank_in_group - 1) % self.world_size
+
+        logger.info(
+            f"recv tensor  src={src}, src_rank={self.ranks[src]}, all_gather_group ranks {torch.distributed.get_process_group_ranks(metadata_group)}"
+        )
         assert src < self.world_size, f"Invalid src rank ({src})"
 
         recv_metadata_list = self.recv_object(src=src)
@@ -887,11 +913,17 @@ def get_tp_group() -> GroupCoordinator:
 get_tensor_model_parallel_group = get_tp_group
 
 _PP: Optional[GroupCoordinator] = None
+_DRIVER: Optional[GroupCoordinator] = None
 
 
 def get_pp_group() -> GroupCoordinator:
     assert _PP is not None, "pipeline model parallel group is not initialized"
     return _PP
+
+
+def get_driver_group() -> GroupCoordinator:
+    assert _DRIVER is not None, "driver model parallel group is not initialized"
+    return _DRIVER
 
 
 # kept for backward compatibility
@@ -1038,7 +1070,6 @@ def initialize_model_parallel(
             range(i * tensor_model_parallel_size, (i + 1) * tensor_model_parallel_size)
         )
         group_ranks.append(ranks)
-
     # message queue broadcaster is only used in tensor model parallel group
     _TP = init_model_parallel_group(
         group_ranks,
@@ -1064,6 +1095,22 @@ def initialize_model_parallel(
         use_custom_allreduce=False,
         group_name="pp",
     )
+
+    driver_ranks = [[]]
+    local_world_size = torch.cuda.device_count()
+    for i in range(world_size):
+        if i % local_world_size == 0:
+            driver_ranks[0].append(i)
+    global _DRIVER
+    if get_world_group().local_rank in driver_ranks[0]:
+        _DRIVER = init_model_parallel_group(
+            driver_ranks,
+            get_world_group().local_rank,
+            backend,
+            use_custom_allreduce=False,
+            use_message_queue_broadcaster=True,
+            group_name="driver",
+        )
 
 
 def ensure_kv_transfer_initialized(vllm_config: "VllmConfig") -> None:

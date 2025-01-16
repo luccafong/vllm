@@ -28,6 +28,7 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import os
 import random
 import time
@@ -642,7 +643,10 @@ async def benchmark(
 
     benchmark_start_time = time.perf_counter()
     tasks: List[asyncio.Task] = []
+    count = 0
     async for request in get_request(input_requests, request_rate, burstiness):
+        count += 1
+        print(f"Sending {count}th request.")
         prompt, prompt_len, output_len, mm_content = request
         request_func_input = RequestFuncInput(
             model=model_id,

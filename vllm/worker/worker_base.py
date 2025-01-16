@@ -3,6 +3,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from logging import log
 from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 
 import torch
@@ -361,6 +362,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             intermediate_tensors = IntermediateTensors(
                 get_pp_group().recv_tensor_dict(all_gather_group=get_tp_group())
             )
+            logger.info("receive tensors")
             if (
                 self.observability_config is not None
                 and self.observability_config.collect_model_execute_time
@@ -368,7 +370,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
                 orig_model_execute_time = intermediate_tensors.tensors.get(
                     "model_execute_time", torch.tensor(0)
                 ).item()
-
+        logger.info("execute model")
         output = self.model_runner.execute_model(
             model_input=model_input,
             kv_caches=(
@@ -380,9 +382,12 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             num_steps=num_steps,
             **kwargs,
         )
+        logger.info("output get")
 
         model_execute_time = time.perf_counter() - start_time
+        logger.info("check if last rank")
         if not get_pp_group().is_last_rank:
+            logger.info("not last rank")
             # output is IntermediateTensors
             assert isinstance(output, IntermediateTensors)
             if (
@@ -392,9 +397,12 @@ class LocalOrDistributedWorkerBase(WorkerBase):
                 output.tensors["model_execute_time"] = torch.tensor(
                     model_execute_time + orig_model_execute_time
                 )
+            logger.info(f"sending tensor dict")
             get_pp_group().send_tensor_dict(
                 output.tensors, all_gather_group=get_tp_group()
             )
+
+            logger.info(f"sent tensor dict, return None")
             return [None]
         if (
             self.observability_config is not None
@@ -405,6 +413,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
                 o.model_execute_time = orig_model_execute_time + model_execute_time
 
         # output is List[SamplerOutput]
+        logger.info("return results")
         return output
 
     def _execute_model_spmd(
