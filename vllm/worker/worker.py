@@ -70,7 +70,7 @@ class Worker(LocalOrDistributedWorkerBase):
             or (speculative_config.draft_model_config.model ==
                 model_config.model) \
             or (speculative_config.draft_model_config.hf_config.model_type
-                not in ["medusa", "mlp_speculator", "eagle"]) \
+                not in ["medusa", "mlp_speculator", "eagle", "deepseek_mtp"]) \
                     else {"return_hidden_states": True}
 
         ModelRunnerClass: Type[GPUModelRunnerBase] = ModelRunner
@@ -139,6 +139,7 @@ class Worker(LocalOrDistributedWorkerBase):
         allocator.wake_up()
 
     def init_device(self) -> None:
+        logger.info("start init device")
         if self.device_config.device.type == "cuda":
             # torch.distributed.all_reduce does not free the input tensor until
             # the synchronization point. This causes the memory usage to grow
@@ -167,6 +168,8 @@ class Worker(LocalOrDistributedWorkerBase):
                                             self.local_rank)
         # Set random seed.
         set_random_seed(self.model_config.seed)
+
+        logger.info(" init device done")
 
     def load_model(self):
         if self.vllm_config.model_config.enable_sleep_mode:

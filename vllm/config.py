@@ -740,7 +740,7 @@ class ModelConfig:
         # TODO remove hard code
         if hasattr(self.hf_text_config,
                    "model_type") and (self.hf_text_config.model_type
-                                      in ('deepseek_v2', 'deepseek_v3')):
+                                      in ('deepseek_v2', 'deepseek_v3', "deepseek_mtp")):
             qk_rope_head_dim = getattr(self.hf_text_config, "qk_rope_head_dim",
                                        0)
             qk_nope_head_dim = getattr(self.hf_text_config, "qk_nope_head_dim",

@@ -34,6 +34,7 @@ def init_tokenizer_from_configs(model_config: ModelConfig,
 def get_tokenizer_group(tokenizer_pool_config: Optional[TokenizerPoolConfig],
                         **init_kwargs) -> BaseTokenizerGroup:
     tokenizer_cls: Type[BaseTokenizerGroup]
+    print(f"tokenizer_pool_config, {tokenizer_pool_config}")
     if tokenizer_pool_config is None:
         tokenizer_cls = TokenizerGroup
     elif isinstance(tokenizer_pool_config.pool_type, type) and issubclass(
@@ -48,6 +49,7 @@ def get_tokenizer_group(tokenizer_pool_config: Optional[TokenizerPoolConfig],
     else:
         raise ValueError(
             f"Unknown pool type: {tokenizer_pool_config.pool_type}")
+    print("from config")
     return tokenizer_cls.from_config(tokenizer_pool_config, **init_kwargs)
 
 

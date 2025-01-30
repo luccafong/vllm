@@ -3,6 +3,8 @@ from vllm.transformers_utils.configs.cohere2 import Cohere2Config
 from vllm.transformers_utils.configs.dbrx import DbrxConfig
 from vllm.transformers_utils.configs.deepseek_vl2 import DeepseekVLV2Config
 from vllm.transformers_utils.configs.eagle import EAGLEConfig
+from vllm.transformers_utils.configs.deepseek_mtp import DeepSeekMTPConfig
+from vllm.transformers_utils.configs.deepseek_v3 import DeepseekV3Config
 from vllm.transformers_utils.configs.exaone import ExaoneConfig
 # RWConfig is for the original tiiuae/falcon-40b(-instruct) and
 # tiiuae/falcon-7b(-instruct) models. Newer Falcon models will use the
@@ -27,6 +29,7 @@ __all__ = [
     "Cohere2Config",
     "DbrxConfig",
     "DeepseekVLV2Config",
+    "DeepseekV3Config",
     "MPTConfig",
     "RWConfig",
     "H2OVLChatConfig",
@@ -43,4 +46,5 @@ __all__ = [
     "SolarConfig",
     "Telechat2Config",
     "UltravoxConfig",
+    "DeepSeekMTPConfig"
 ]

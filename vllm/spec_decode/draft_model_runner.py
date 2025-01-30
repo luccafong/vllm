@@ -184,7 +184,6 @@ class TP1DraftModelRunner(ModelRunnerWrapperBase):
             3. Reuses sampling tensors (since we run only decodes and they have
                 a repeating sampling logic)
         """
-
         # When num_steps == 1, we execute the fallback here for the GPU
         # advance_step, which runs prepare_inputs on CPU and for each spec
         # iteration invokes this function only once
@@ -272,7 +271,11 @@ class TP1DraftModelRunner(ModelRunnerWrapperBase):
             kwargs = {"previous_hidden_states": hidden_states} \
                 if previous_hidden_states is not None else {}
 
+            compute_logits_kwargs = {}
             # Run model
+            if hasattr(self.model.config, "num_nextn_predict_layers"):
+                kwargs["step_idx"] = step
+                compute_logits_kwargs["step_idx"] = step
             with set_forward_context(model_input.attn_metadata,
                                      self.vllm_config):
                 hidden_states = model_executable(
@@ -288,7 +291,7 @@ class TP1DraftModelRunner(ModelRunnerWrapperBase):
 
             # Compute the logits.
             logits = self.model.compute_logits(hidden_states,
-                                               model_input.sampling_metadata)
+                                               model_input.sampling_metadata, **compute_logits_kwargs)
 
             # Sample the next token.
             output = self.model.sample(

@@ -268,7 +268,6 @@ class DeepseekV3Attention(nn.Module):
             scaling_factor = rope_scaling["factor"]
             mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
             self.scaling = self.scaling * mscale * mscale
-
         self.attn = Attention(self.num_local_heads,
                               self.qk_head_dim,
                               self.scaling,
@@ -586,15 +585,9 @@ class DeepseekV3ForCausalLM(nn.Module, SupportsPP):
         for name, loaded_weight in weights:
             if "rotary_emb.inv_freq" in name:
                 continue
-
-            # TODO(simon): support nextn predict layers
-            if hasattr(self.config, "num_nextn_predict_layers"
-                       ) and self.config.num_nextn_predict_layers > 0:
-                assert self.config.num_nextn_predict_layers == 1
-                layer_idx = self.config.num_hidden_layers
-                if name.startswith(f"model.layers.{layer_idx}"):
-                    continue
-
+            spec_layer = get_spec_layer_idx_from_weight_name(self.config, name)
+            if spec_layer is not None:
+                continue  # skip spec decode layers for main model
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
                 # Skip non-stacked layers and experts (experts handled below).
                 if weight_name not in name:
@@ -612,9 +605,6 @@ class DeepseekV3ForCausalLM(nn.Module, SupportsPP):
                 if name.endswith(".bias") and name not in params_dict:
                     continue
 
-                if is_pp_missing_parameter(name, self):
-                    continue
-
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
@@ -625,9 +615,6 @@ class DeepseekV3ForCausalLM(nn.Module, SupportsPP):
                     if weight_name not in name:
                         continue
                     name = name.replace(weight_name, param_name)
-
-                    if is_pp_missing_parameter(name, self):
-                        continue
 
                     param = params_dict[name]
                     weight_loader = param.weight_loader
@@ -642,8 +629,6 @@ class DeepseekV3ForCausalLM(nn.Module, SupportsPP):
                     if name.endswith(".bias") and name not in params_dict:
                         continue
 
-                    if is_pp_missing_parameter(name, self):
-                        continue
 
                     param = params_dict[name]
                     weight_loader = getattr(param, "weight_loader",
@@ -651,3 +636,14 @@ class DeepseekV3ForCausalLM(nn.Module, SupportsPP):
                     weight_loader(param, loaded_weight)
             loaded_params.add(name)
         return loaded_params
+
+
+def get_spec_layer_idx_from_weight_name(config: PretrainedConfig, 
+                                        weight_name: str) -> Optional[int]:
+    if hasattr(config, "num_nextn_predict_layers"
+               ) and (config.num_nextn_predict_layers > 0):
+        layer_idx = config.num_hidden_layers
+        for i in range(config.num_nextn_predict_layers):
+            if weight_name.startswith(f"model.layers.{layer_idx+i}."):
+                return layer_idx + i
+    return None

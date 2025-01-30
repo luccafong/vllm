@@ -180,9 +180,9 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
                         draft_worker_kwargs[
                             "model_runner_cls"] = TP1DraftModelRunner
                 else:
-                    if draft_model_config.hf_config.model_type == "eagle":
+                    if draft_model_config.hf_config.model_type in ["eagle", "deepseek_mtp"]:
                         raise NotImplementedError(
-                            "EAGLE does not support TP > 1 yet")
+                            "EAGLE or DeepSeek MTP does not support TP > 1 yet")
 
                     allow_zero_draft_token_step = False
                 proposer_worker = MultiStepWorker(**draft_worker_kwargs)
@@ -312,6 +312,7 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
         self.previous_hidden_states: Optional[HiddenStates] = None
         self._disable_logprobs = disable_logprobs
         self._disable_log_stats = disable_log_stats
+        logger.info("Speculative decode worker generated")
 
     def init_device(self) -> None:
         """Initialize both scorer and proposer models.
@@ -660,7 +661,6 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
             execute_model_req.previous_hidden_states = \
                 prepare_prefill_hidden_states(
                     sampler_output.prefill_hidden_states)
-
             self.proposer_worker.execute_model(execute_model_req)
 
         sampler_output_to_return = (self._serialize_sampler_output_no_logprobs(

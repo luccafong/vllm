@@ -239,8 +239,9 @@ class LLMEngine:
 
         self.log_stats = log_stats
         self.use_cached_outputs = use_cached_outputs
-
+        print("self.model_config.skip_tokenizer_init")
         if not self.model_config.skip_tokenizer_init:
+            print("_init_tokenizer")
             self.tokenizer = self._init_tokenizer()
             self.detokenizer = Detokenizer(self.tokenizer)
             tokenizer_group = self.get_tokenizer_group()

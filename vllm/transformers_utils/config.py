@@ -25,7 +25,7 @@ from vllm.logger import init_logger
 from vllm.transformers_utils.configs import (ChatGLMConfig, Cohere2Config,
                                              DbrxConfig, DeepseekVLV2Config,
                                              EAGLEConfig, ExaoneConfig,
-                                             H2OVLChatConfig,
+                                             DeepSeekMTPConfig, H2OVLChatConfig,
                                              InternVLChatConfig, JAISConfig,
                                              MedusaConfig, MllamaConfig,
                                              MLPSpeculatorConfig, MPTConfig,
@@ -63,6 +63,7 @@ _CONFIG_REGISTRY: Dict[str, Type[PretrainedConfig]] = {
     "mlp_speculator": MLPSpeculatorConfig,
     "medusa": MedusaConfig,
     "eagle": EAGLEConfig,
+    "deepseek_mtp": DeepSeekMTPConfig,
     "exaone": ExaoneConfig,
     "h2ovl_chat": H2OVLChatConfig,
     "internvl_chat": InternVLChatConfig,
@@ -84,6 +85,7 @@ class ConfigFormat(str, enum.Enum):
 
 def file_or_path_exists(model: Union[str, Path], config_name: str,
                         revision: Optional[str]) -> bool:
+    logger.info("model: %s, config_name: %s", model, config_name)
     if Path(model).exists():
         return (Path(model) / config_name).is_file()
 
@@ -210,6 +212,7 @@ def get_config(
         model_type = config_dict.get("model_type")
         if model_type in _CONFIG_REGISTRY:
             config_class = _CONFIG_REGISTRY[model_type]
+            print(f"config_class from pretrained: {model=}")
             config = config_class.from_pretrained(
                 model,
                 revision=revision,

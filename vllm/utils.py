@@ -2166,6 +2166,8 @@ def bind_kv_cache(
     #    attention of the same layer (e.g., bart's decoder.layers.1.self_attn
     #    and decoder.layers.1.encoder_attn) is mapped to the same kv cache
     #    tensor
+    print(f"{ctx=}")
+    print(f"{len(kv_cache)=}, {len(kv_cache[0])=}, {kv_cache[0][0].shape=}")
     from vllm.attention import AttentionType
     from vllm.model_executor.models.utils import extract_layer_index
     layer_need_kv_cache = [

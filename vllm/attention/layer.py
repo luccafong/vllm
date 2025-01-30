@@ -126,6 +126,7 @@ class Attention(nn.Module):
         compilation_config = get_current_vllm_config().compilation_config
         if prefix in compilation_config.static_forward_context:
             raise ValueError(f"Duplicate layer name: {prefix}")
+        print(f"Registering layer {prefix} for static forward context")
         compilation_config.static_forward_context[prefix] = self
         self.layer_name = prefix
         self.attn_type = attn_type
