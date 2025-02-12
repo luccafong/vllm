@@ -29,7 +29,7 @@ from vllm.logger import init_logger
 # yapf conflicts with isort for this block
 # yapf: disable
 from vllm.transformers_utils.configs import (ChatGLMConfig, Cohere2Config,
-                                             DbrxConfig, DeepSeekMTPConfig,
+                                             DbrxConfig,
                                              DeepseekVLV2Config, EAGLEConfig,
                                              ExaoneConfig, H2OVLChatConfig,
                                              InternVLChatConfig, JAISConfig,
@@ -69,7 +69,6 @@ _CONFIG_REGISTRY: Dict[str, Type[PretrainedConfig]] = {
     "mlp_speculator": MLPSpeculatorConfig,
     "medusa": MedusaConfig,
     "eagle": EAGLEConfig,
-    "deepseek_mtp": DeepSeekMTPConfig,
     "exaone": ExaoneConfig,
     "h2ovl_chat": H2OVLChatConfig,
     "internvl_chat": InternVLChatConfig,
