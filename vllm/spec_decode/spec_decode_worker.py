@@ -157,7 +157,7 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
     ) -> "SpecDecodeWorker":
 
         allow_zero_draft_token_step = True
-        num_spec_prefill_steps = 1
+        next_n_prediction_steps = -1
         ngram_prompt_lookup_max = (
             draft_worker_kwargs.pop("ngram_prompt_lookup_max"))
         ngram_prompt_lookup_min = (
@@ -192,9 +192,9 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
                             "does not support TP > 1 yet")
 
                     allow_zero_draft_token_step = False
-                proposer_worker = MultiStepWorker(**draft_worker_kwargs)
                 if draft_model_config.hf_config.model_type == "deepseek_mtp":
-                    num_spec_prefill_steps = num_speculative_tokens
+                    next_n_prediction_steps = num_speculative_tokens
+                proposer_worker = MultiStepWorker(**draft_worker_kwargs)
 
             proposer_worker = SmallerTpProposerWorker.maybe_wrap_worker(
                 proposer_worker, draft_tp, target_tp)
@@ -247,7 +247,7 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
             disable_by_batch_size=disable_by_batch_size,
             spec_decode_sampler=spec_decode_sampler,
             allow_zero_draft_token_step=allow_zero_draft_token_step,
-            num_spec_prefill_steps=num_spec_prefill_steps,
+            next_n_prediction_steps=next_n_prediction_steps,
         )
 
     def __init__(
@@ -261,7 +261,7 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
         metrics_collector: Optional[AsyncMetricsCollector] = None,
         disable_by_batch_size: Optional[int] = None,
         allow_zero_draft_token_step: Optional[bool] = True,
-        num_spec_prefill_steps: int = 1,
+        next_n_prediction_steps: int = -1,
     ):
         """
         Create a SpecDecodeWorker.
@@ -292,7 +292,7 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
             allow_zero_draft_token_step: whether to allow a step where the draft
                 model generates no draft token; should disallow when the tp of
                 draft model is larger than 1 (TODO: #5814)
-            num_spec_prefill_steps: number of speculative prefill steps to run
+            next_n_prediction_steps: number of speculative prefill steps to run
                 before the speculative decoding starts. This is only used when
                 the draft model is a deepseek_mtp model that requires prefill
                 kv cache separately for each step layer.
@@ -328,7 +328,7 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
         self.previous_hidden_states: Optional[HiddenStates] = None
         self._disable_logprobs = disable_logprobs
         self._disable_log_stats = disable_log_stats
-        self._num_spec_prefill_steps = num_spec_prefill_steps
+        self._next_n_prediction_steps = next_n_prediction_steps
 
     def init_device(self) -> None:
         """Initialize both scorer and proposer models.
@@ -513,8 +513,10 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
         if no_spec:
             return self._run_no_spec(execute_model_req,
                                      skip_proposer=disable_all_speculation)
-        return self._run_speculative_decoding_step(execute_model_req,
-                                                   num_lookahead_slots)
+        results = self._run_speculative_decoding_step(
+            execute_model_req,
+            num_lookahead_slots)
+        return results
 
     @torch.inference_mode()
     def start_worker_execution_loop(self) -> None:
@@ -643,7 +645,6 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
         not called, meaning that the kv-cache in proposer for requests is not
         updated, so they cannot enable spec decode in the rest decoding.
         """
-
         sampler_output = self.scorer_worker.execute_model(execute_model_req)
         assert len(sampler_output) == 1
         sampler_output = sampler_output[0]
@@ -664,7 +665,7 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
             if self.previous_hidden_states is None and len(
                     seq_group_meta_with_hidden):
                 self.previous_hidden_states = HiddenStates(
-                    hidden_states, seq_group_meta_with_hidden)
+                    hidden_states, seq_group_meta_with_hidden)  # hidden states for T, (T+1 token)
             elif self.previous_hidden_states and len(
                     seq_group_meta_with_hidden):
                 self.previous_hidden_states.update(hidden_states,
@@ -674,14 +675,11 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
             # We prepare the prefill hidden states here so that there no
             # additional complexity in worker for spec_decode vs non_spec_decode
             # flow and execute_model doesn't need additional modifications.
+            execute_model_req.spec_step_idx = -1
             execute_model_req.previous_hidden_states = \
                 prepare_prefill_hidden_states(
                     sampler_output.prefill_hidden_states)
-            execute_model_req.spec_step_idx = 0
-            for _ in range(self._num_spec_prefill_steps):
-                self.proposer_worker.execute_model(execute_model_req)
-                execute_model_req.spec_step_idx += 1
-
+            self.proposer_worker.execute_model(execute_model_req)
         sampler_output_to_return = (self._serialize_sampler_output_no_logprobs(
             execute_model_req=execute_model_req, sampler_output=sampler_output)
                                     if self._disable_logprobs else
@@ -887,22 +885,35 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
             # Contract hidden states based on accepted tokens
             hs_size = hidden_states.shape[-1]
             accepted_index = accepted_token_ids + 1  # Convert -1 to 0
-            accepted_index = accepted_index.count_nonzero(dim=1).add_(-1)  # b
-            # Drop non-terminal prefill chunks hidden states.
-            hidden_states = hidden_states[accepted_index !=
-                                          VLLM_INVALID_TOKEN_ID]
-            accepted_index = accepted_index[accepted_index !=
+            accepted_index = accepted_index.count_nonzero(dim=1)
+            if self._next_n_prediction_steps > 0:
+                hidden_states = hidden_states.reshape(-1, hs_size)[
+                    accepted_token_ids.reshape(-1) != VLLM_INVALID_TOKEN_ID]
+                seq_indices = torch.repeat_interleave(
+                    torch.arange(0, accepted_index.shape[0]).to(hidden_states.device),
+                    accepted_index
+                )  # seq indices for each hidden state
+                self.previous_hidden_states = HiddenStates(
+                    hidden_states, terminal_metadata,
+                    hidden_states_seq_indices=seq_indices,
+                )
+            else:
+                # Drop non-terminal prefill chunks hidden states.
+                hidden_states = hidden_states[accepted_index !=
                                             VLLM_INVALID_TOKEN_ID]
-            assert len(accepted_index) == hidden_states.shape[0] == len(
-                terminal_metadata)
-            index = accepted_index[:, None, None].expand(-1, 1,
-                                                         hs_size)  # b x 1 x d
-            second_last_token_hidden_states = hidden_states[:, -2]  # b x d
-            hidden_states = hidden_states.gather(1, index).squeeze(1)  # b x d
-            # Store hidden states from target model for subsequent decode step
-            self.previous_hidden_states = HiddenStates(
-                hidden_states, terminal_metadata,
-                second_last_token_hidden_states)
+                accepted_index.add_(-1)
+                accepted_index = accepted_index[accepted_index !=
+                                                VLLM_INVALID_TOKEN_ID]
+                assert len(accepted_index) == hidden_states.shape[0] == len(
+                    terminal_metadata)
+                index = accepted_index[:, None, None].expand(-1, 1,
+                                                            hs_size)  # b x 1 x d
+                second_last_token_hidden_states = hidden_states[:, -2]  # b x d
+                hidden_states = hidden_states.gather(1, index).squeeze(1)  # b x d
+                # Store hidden states from target model for subsequent decode step
+                self.previous_hidden_states = HiddenStates(
+                    hidden_states, terminal_metadata,
+                    second_last_token_hidden_states)
         return accepted_token_ids, logprobs
 
     def _create_output_sampler_list(
