@@ -25,7 +25,8 @@ from transformers import Llama4TextConfig
 from vllm.attention import Attention
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, VllmConfig
-from vllm.distributed import (get_tensor_model_parallel_world_size,
+from vllm.distributed import (get_tensor_model_parallel_rank,
+                              get_tensor_model_parallel_world_size,
                               tensor_model_parallel_all_reduce)
 from vllm.model_executor.layers.fused_moe import FusedMoE
 from vllm.model_executor.layers.layernorm import RMSNorm
@@ -147,8 +148,7 @@ class Llama4Attention(nn.Module):
         self.kv_size = self.num_kv_heads * self.head_dim
         self.scaling = self.head_dim**-0.5
         # TODO: attn_temperature_tuning should be a bool in huggingface
-        self.attn_temperature_tuning = self.nope and \
-            config.attn_temperature_tuning > 0
+        self.attn_temperature_tuning = False
 
         self.floor_scale = getattr(config, "floor_scale", 8192.0)
         self.attn_scale = getattr(config, "attn_scale", 0.1)
@@ -211,9 +211,14 @@ class Llama4Attention(nn.Module):
         )
 
     def _get_attn_scale(self, positions: torch.Tensor) -> torch.Tensor:
-        floor = torch.floor((positions + 1.0) / self.floor_scale)
-        attn_scale = torch.log(floor + 1.0) * self.attn_scale + 1.0
-
+        if self.floor_scale is not None:
+            # print(f"{positions=}")
+            positions = torch.floor((positions + 1.0) / self.floor_scale)
+            attn_scale = torch.log(positions + 1.0) * self.attn_scale + 1.0
+            # print(f"{attn_scale=}")
+        else:
+            attn_scale = torch.log(positions * 1.0) * self.attn_scale
+            # print(f"{attn_scale=}, {positions=}")
         return attn_scale.unsqueeze(-1)
 
     def forward(
@@ -239,7 +244,7 @@ class Llama4Attention(nn.Module):
         #
         # We should apply temperature tuning between (after) rotary / QK norm
         # and (before) attention.
-        if self.attn_temperature_tuning and self.nope:
+        if self.attn_temperature_tuning:
             attn_scale = self._get_attn_scale(positions)
             q = (q * attn_scale).to(q.dtype)
         attn_output = self.attn(q, k, v)
@@ -307,19 +312,50 @@ class Llama4DecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Self Attention
+        tp_size = get_tensor_model_parallel_world_size()
+        dump = False
+        if self.layer_idx in [0, 1] and (len(positions) < 10
+                                         and len(positions) > 4):
+            dump = True
+        rank = get_tensor_model_parallel_rank()
+        if dump:
+            torch.save(
+                hidden_states,
+                f"/tmp/llm/input_hidden_states_tp_{tp_size}_r{rank}_l{self.layer_idx}.pt"
+            )
         if residual is None:
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
             hidden_states, residual = self.input_layernorm(
                 hidden_states, residual)
+
+        if dump:
+            torch.save(
+                hidden_states,
+                f"/tmp/llm/input_layernorm_tp_{tp_size}_r{rank}_l{self.layer_idx}.pt"
+            )
         hidden_states = self.self_attn(positions=positions,
                                        hidden_states=hidden_states)
 
+        if dump:
+            torch.save(
+                hidden_states,
+                f"/tmp/llm/attn_output_tp_{tp_size}_{rank}_l{self.layer_idx}.pt"
+            )
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(
             hidden_states, residual)
+        if dump:
+            torch.save(
+                hidden_states,
+                f"/tmp/llm/post_attn_layernorm_tp_{tp_size}_{rank}_l{self.layer_idx}.pt"
+            )
         hidden_states = self.feed_forward(hidden_states)
+        if dump:
+            torch.save(
+                hidden_states,
+                f"/tmp/llm/moe_tp_{tp_size}_{rank}_l{self.layer_idx}.pt")
         return hidden_states, residual
 
 
@@ -476,7 +512,10 @@ class Llama4ForCausalLM(LlamaForCausalLM):
         gen_config = vllm_config.model_config.try_get_generation_config()
         gen_config.update(vllm_config.model_config.override_generation_config)
         vllm_config.model_config.hf_config.attn_temperature_tuning \
-            = gen_config.get("attn_temperature_tuning", False)
+            = gen_config.get("attn_temperature_tuning", True)
+        print(
+            f"attn_temperature_tuning: {vllm_config.model_config.hf_config.attn_temperature_tuning}"
+        )
 
         super().__init__(vllm_config=vllm_config,
                          prefix=prefix,
