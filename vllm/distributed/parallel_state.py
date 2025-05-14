@@ -452,7 +452,8 @@ class GroupCoordinator:
                                                 group=self.device_group)
         return obj_list
 
-    def send_object(self, obj: Any, dst: int) -> None:
+
+    def send_object(self, obj: Any, dst: int, is_async: bool = False) -> None:
         """Send the input object list to the destination rank."""
         """NOTE: `dst` is the local rank of the destination rank."""
 
@@ -470,7 +471,17 @@ class GroupCoordinator:
                                    device="cpu")
 
         # Send object size
-
+        if is_async:
+            work = torch.distributed.isend(size_tensor,
+                                          dst=self.ranks[dst],
+                                          group=self.cpu_group)
+            assert work is not None
+            return work.get_future().then(
+                lambda x: torch.distributed.send(size_tensor,
+                                                 dst=self.ranks[dst],
+                                                 group=self.cpu_group)
+            )
+            
         torch.distributed.send(size_tensor,
                                dst=self.ranks[dst],
                                group=self.cpu_group)
@@ -482,7 +493,8 @@ class GroupCoordinator:
 
         return None
 
-    def recv_object(self, src: int) -> Any:
+
+    def recv_object(self, src: int, is_async: bool = False) -> Any:
         """Receive the input object list from the source rank."""
         """NOTE: `src` is the local rank of the source rank."""
 
@@ -491,30 +503,41 @@ class GroupCoordinator:
         assert src != self.rank_in_group, (
             "Invalid source rank. Source rank is the same as the current rank."
         )
+        def recv_object_tensor(size_tensor: torch.Tensor) -> Any:
+            # Tensor to receive serialized objects into.
+            object_tensor = torch.empty(  # type: ignore[call-overload]
+                size_tensor.item(),  # type: ignore[arg-type]
+                dtype=torch.uint8,
+                device="cpu")
+            
+
+            rank_object = torch.distributed.recv(object_tensor,
+                                                src=self.ranks[src],
+                                                group=self.cpu_group)
+
+            assert rank_object == rank_size, (
+                "Received object sender rank does not match the size sender rank.")
+
+            obj = pickle.loads(object_tensor.numpy().tobytes())
+
+            return obj
 
         size_tensor = torch.empty(1, dtype=torch.long, device="cpu")
 
+        # Send object size
+        if is_async:
+            work = torch.distributed.irecv(size_tensor,
+                                          src=self.ranks[src],
+                                          group=self.cpu_group)
+            assert work is not None
+            return work.get_future().then(lambda x: recv_object_tensor(x.value()))
         # Receive object size
         rank_size = torch.distributed.recv(size_tensor,
                                            src=self.ranks[src],
                                            group=self.cpu_group)
+        return recv_object_tensor(size_tensor)
 
-        # Tensor to receive serialized objects into.
-        object_tensor = torch.empty(  # type: ignore[call-overload]
-            size_tensor.item(),  # type: ignore[arg-type]
-            dtype=torch.uint8,
-            device="cpu")
 
-        rank_object = torch.distributed.recv(object_tensor,
-                                             src=self.ranks[src],
-                                             group=self.cpu_group)
-
-        assert rank_object == rank_size, (
-            "Received object sender rank does not match the size sender rank.")
-
-        obj = pickle.loads(object_tensor.numpy().tobytes())
-
-        return obj
 
     def broadcast_tensor_dict(
         self,

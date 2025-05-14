@@ -1175,7 +1175,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # https://github.com/vllm-project/vllm/issues/18019
         broadcast_pp_output = \
             self.parallel_config.distributed_executor_backend \
-            == "external_launcher" and len(get_pp_group().ranks) > 0
+            == "external_lancher" and len(get_pp_group().ranks) > 0
         if not get_pp_group().is_last_rank:
             # For mid-pipeline stages, return the hidden states.
             if not broadcast_pp_output:

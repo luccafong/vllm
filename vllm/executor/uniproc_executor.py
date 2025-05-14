@@ -5,7 +5,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
+from concurrent.futures import Future
 
+from vllm.distributed.parallel_state import get_pp_group
 import vllm.envs as envs
 from vllm.executor.executor_base import ExecutorBase
 from vllm.logger import init_logger
@@ -106,6 +108,7 @@ class ExecutorWithExternalLauncher(UniProcExecutor):
         distributed_init_method = "env://"
         rank = int(os.environ["RANK"])
         local_rank = int(os.environ["LOCAL_RANK"])
+        self.local_rank = local_rank
         is_driver_worker = True
         kwargs = dict(
             vllm_config=self.vllm_config,
@@ -118,6 +121,61 @@ class ExecutorWithExternalLauncher(UniProcExecutor):
         self.collective_rpc("init_device")
         self.collective_rpc("load_model")
 
+    def torch_future_to_concurrent_future(
+        self, torch_future: torch.futures.Future,
+        timeout: Optional[float] = None
+    ) -> Future:
+        """
+        Convert a PyTorch distributed Future to a concurrent.futures.Future.
+        
+        Args:
+            torch_future: The PyTorch Future to convert
+            timeout: Optional timeout for the wait operation
+            
+        Returns:
+            concurrent.futures.Future that will complete when the PyTorch Future completes
+        """
+        concurrent_future = Future()
+        
+        def _complete_torch_future(fut: torch.futures.Future):
+            try:
+                # Get the result from the PyTorch future
+                result = fut.wait(timeout)
+                if not concurrent_future.done():
+                    concurrent_future.set_result(result)
+            except Exception as e:
+                if not concurrent_future.done():
+                    concurrent_future.set_exception(e)
+        
+        # Register our callback to be called when the PyTorch future completes
+        torch_future.add_done_callback(_complete_torch_future)
+        
+        return concurrent_future
+    def collective_rpc(self,
+                       method: Union[str, Callable],
+                       timeout: Optional[float] = None,
+                       args: Tuple = (),
+                       kwargs: Optional[Dict] = None) -> List[Any]:
+        if kwargs is None:
+            kwargs = {}
+        answer = run_method(self.driver_worker, method, args, kwargs)
+        if method == "execute_model":
+            pp_size = self.vllm_config.parallel_config.pipeline_parallel_size
+            tp_size = self.vllm_config.parallel_config.tensor_parallel_size
+            if pp_size > 1:
+                # get the answer from the last PP rank
+                if answer is None and self.local_rank // tp_size == 0: 
+                    # we need to async receive last PP ranks
+                    answer = get_pp_group().recv_object(pp_size-1, is_async=True)
+                    answer = self.torch_future_to_concurrent_future(answer)
+                if answer is not None and self.local_rank // tp_size == pp_size-1:
+                    # we need to async send to the first PP rank
+                    get_pp_group().send_object(answer, 0, is_async=True)
+            
+            return [answer]
+
+
+        return [answer]
     def determine_num_available_blocks(self) -> Tuple[int, int]:
         """
         Determine the number of available KV blocks.
