@@ -112,6 +112,7 @@ class ExecutorBase(ABC):
         logger.info("# %s blocks: %d, # CPU blocks: %d",
                     vllm.platforms.current_platform.device_name,
                     num_gpu_blocks, num_cpu_blocks)
+        print(f"{self.cache_config.block_size=}, {num_gpu_blocks=}")
         max_concurrency = (num_gpu_blocks * self.cache_config.block_size /
                            self.model_config.max_model_len)
         logger.info("Maximum concurrency for %s tokens per request: %.2fx",
