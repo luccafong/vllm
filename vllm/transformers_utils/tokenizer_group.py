@@ -3,12 +3,15 @@
 from typing import Optional
 
 from vllm.config import LoRAConfig, ModelConfig, SchedulerConfig
+from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.transformers_utils.tokenizer import (AnyTokenizer, encode_tokens,
                                                get_lora_tokenizer,
                                                get_lora_tokenizer_async,
                                                get_tokenizer)
 from vllm.utils import LRUCache
+
+logger = init_logger(__name__)
 
 
 class TokenizerGroup:
@@ -21,6 +24,8 @@ class TokenizerGroup:
         self.enable_lora = enable_lora
         self.max_input_length = max_input_length
         self.tokenizer = get_tokenizer(self.tokenizer_id, **tokenizer_config)
+        logger.info("[qqzz] Init tokenizer vocab_size=%s",
+                    self.tokenizer.vocab_size)
         max_loras = tokenizer_config.get("max_loras", 0)
         self.lora_tokenizers = LRUCache[int, AnyTokenizer](
             capacity=max(max_loras, max_num_seqs) if enable_lora else 0)
@@ -107,6 +112,9 @@ class TokenizerGroup:
 def init_tokenizer_from_configs(model_config: ModelConfig,
                                 scheduler_config: SchedulerConfig,
                                 lora_config: Optional[LoRAConfig]):
+    logger.info(
+        "Initializing tokenizer with scheduler_config.max_num_seqs=%s, %s",
+        scheduler_config.max_num_seqs, model_config)
     return TokenizerGroup(
         tokenizer_id=model_config.tokenizer,
         enable_lora=bool(lora_config),

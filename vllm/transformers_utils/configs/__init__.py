@@ -24,6 +24,7 @@ from vllm.transformers_utils.configs.mpt import MPTConfig
 from vllm.transformers_utils.configs.nemotron import NemotronConfig
 from vllm.transformers_utils.configs.nvlm_d import NVLM_D_Config
 from vllm.transformers_utils.configs.ovis import OvisConfig
+from vllm.transformers_utils.configs.rawllama import RawLlamaConfig
 from vllm.transformers_utils.configs.skyworkr1v import SkyworkR1VChatConfig
 from vllm.transformers_utils.configs.solar import SolarConfig
 from vllm.transformers_utils.configs.telechat2 import Telechat2Config
@@ -51,6 +52,7 @@ __all__ = [
     "NemotronConfig",
     "NVLM_D_Config",
     "OvisConfig",
+    "RawLlamaConfig",
     "SkyworkR1VChatConfig",
     "SolarConfig",
     "Telechat2Config",

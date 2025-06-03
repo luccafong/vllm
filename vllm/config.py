@@ -523,9 +523,11 @@ class ModelConfig:
         if isinstance(self.config_format, str):
             self.config_format = ConfigFormat(self.config_format)
 
+        logger.info("[qqzz] self.config_format=%s", self.config_format)
         hf_config = get_config(self.hf_config_path or self.model,
                                self.trust_remote_code, self.revision,
                                self.code_revision, self.config_format)
+        logger.info("[qqzz] %s", hf_config)
 
         if hf_overrides_kw:
             logger.info("Overriding HF config with %s", hf_overrides_kw)
