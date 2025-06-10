@@ -148,7 +148,7 @@ class Gemma3Attention(nn.Module):
         layer_idx = extract_layer_index(prefix)
         self.is_sliding = (getattr(
             config, "interleaved_sliding_window", None) is not None and bool(
-                (layer_idx + 1) % config.sliding_window_pattern))
+                (layer_idx + 1) % getattr(config, "sliding_window_pattern", 2)))
         # Initialize the rotary embedding.
         if self.is_sliding:
             # Local attention. Override the values in config.json.

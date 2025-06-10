@@ -5,8 +5,10 @@ from typing import Callable
 
 from vllm.utils import cdiv
 from vllm.v1.core.block_pool import BlockPool
+
 from vllm.v1.core.kv_cache_utils import BlockHashType, KVCacheBlock
-from vllm.v1.kv_cache_interface import (FullAttentionSpec, KVCacheSpec,
+from vllm.v1.kv_cache_interface import (ChunkedLocalAttentionSpec,
+                                        FullAttentionSpec, KVCacheSpec,
                                         SlidingWindowSpec)
 from vllm.v1.request import Request
 
@@ -383,6 +385,98 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
     def get_num_common_prefix_blocks(self, request_id: str,
                                      num_running_requests: int) -> int:
         """
+        NOTE(Chen): The prefix blocks are null blocks for local attention window layers.
+        So it's not correct to count ref_cnt like FullAttentionManager. Return 
+        0 here for correctness. Need to support cascade attention + local attention 
+        window in the future.
+        """
+        return 0
+
+
+class ChunkedLocalAttentionManager(SingleTypeKVCacheManager):
+
+    def __init__(self, kv_cache_spec: ChunkedLocalAttentionSpec,
+                 block_pool: BlockPool, **kwargs) -> None:
+        super().__init__(kv_cache_spec, block_pool, **kwargs)
+        print(f"chunked loal attention init with"
+              f"{kv_cache_spec=}, {block_pool=}, {kwargs=}")
+        self.attention_chunk_size = kv_cache_spec.attention_chunk_size
+        self._null_block = block_pool.null_block
+
+    @classmethod
+    def find_longest_cache_hit(
+        cls,
+        block_hashes: list[BlockHashType],
+        max_length: int,
+        kv_cache_group_ids: list[int],
+        block_pool: BlockPool,
+        kv_cache_spec: KVCacheSpec,
+        use_eagle: bool,
+    ) -> list[list[KVCacheBlock]]:
+        # print(f"finding longeset cache hit for"
+        #       f"{len(block_hashes)=}, {max_length=}, "
+        #       f"{kv_cache_group_ids=},"
+        #       f"{kv_cache_spec=}, {use_eagle=}")
+        assert isinstance(kv_cache_spec, ChunkedLocalAttentionSpec), (
+            "ChunkedLocalAttentionManager can only be used for " +
+            "chunked local attentiongroups")
+        max_num_blocks = max_length // kv_cache_spec.block_size
+        if max_length > 0:
+            local_attention_start_idx = (max_length-1) // kv_cache_spec.attention_chunk_size \
+                                * kv_cache_spec.attention_chunk_size
+        else:
+            local_attention_start_idx = 0
+        # [ block 0, ..., block x(x_start<=first_attention_token), block x+1, .., block N (N_end <=current_token_len(max_len)), ...]
+        local_attention_start_block_idx = local_attention_start_idx // kv_cache_spec.block_size 
+        computed_blocks: list[list[KVCacheBlock]] = [
+            [block_pool.null_block] * local_attention_start_block_idx for _ in range(len(kv_cache_group_ids))
+        ]
+        # print(f"{len(computed_blocks[0])=} before look up")
+        for i in range(local_attention_start_block_idx, max_num_blocks):
+            block_hash = block_hashes[i]
+            if cached_block := block_pool.get_cached_block(
+                    block_hash, kv_cache_group_ids):
+                # print(f"found cached block {cached_block=} for block {i}")
+                for j in range(len(kv_cache_group_ids)):
+                    computed_blocks[j].append(cached_block[j])
+            else:
+                break
+        if use_eagle and len(computed_blocks[0]) > 0:
+            for j in range(len(kv_cache_group_ids)):
+                computed_blocks[j].pop()
+        return computed_blocks
+
+    def remove_skipped_blocks(self, request_id: str,
+                              num_computed_tokens: int) -> None:
+        # Remove the blocks that are no longer be in the chunked attention window and
+        # skipped during the attention computation.
+
+        # (N+1) // chunk_size * chunk_size
+        # [chunk 0][chunk 1]local_attention_start_idx ... current
+
+
+        local_attention_start_idx = (
+            num_computed_tokens - 1) // self.attention_chunk_size * self.attention_chunk_size
+        # 1024-> 0, 1025-> 1024
+        first_useful_block_idx = local_attention_start_idx // self.block_size
+        # block size =128, 0 -> block 0, 1024 -> block 8, 372 -> block 2
+        blocks = self.req_to_blocks[request_id]
+        removed_blocks: list[KVCacheBlock] = []
+        blockids = []
+        for i in range(first_useful_block_idx - 1, -1, -1):
+            if blocks[i] == self._null_block:
+                # If the block is already a null block, the blocks before it
+                # should also have been set to null blocks by the previous calls
+                # to this function.
+                break
+            removed_blocks.append(blocks[i])
+            blockids.append(i)
+            blocks[i] = self._null_block
+        self.block_pool.free_blocks(removed_blocks)
+
+    def get_num_common_prefix_blocks(self, request_id: str,
+                                     num_running_requests: int) -> int:
+        """
         NOTE(Chen): The prefix blocks are null blocks for sliding window layers.
         So it's not correct to count ref_cnt like FullAttentionManager. Return 
         0 here for correctness. Need to support cascade attention + sliding 
@@ -394,6 +488,7 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
 spec_manager_map: dict[type[KVCacheSpec], type[SingleTypeKVCacheManager]] = {
     FullAttentionSpec: FullAttentionManager,
     SlidingWindowSpec: SlidingWindowManager,
+    ChunkedLocalAttentionSpec: ChunkedLocalAttentionManager,
 }
 
 

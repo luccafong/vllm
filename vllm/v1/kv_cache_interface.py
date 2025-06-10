@@ -124,6 +124,63 @@ class FullAttentionSpec(AttentionSpec):
 
 
 @dataclass
+class ChunkedLocalAttentionSpec(AttentionSpec):
+    attention_chunk_size: int
+    """
+    When hybrid allocator is disabled and the model contains both full 
+    attention layers and chunked local attention layers, chunked 
+    local attention layers are regarded as full attention in KV cache manager 
+    (blocks are allocated for all tokens), while computed as chunked local 
+    attention in model runner.
+    In this case, we use FullAttentionSpec and record the 
+    local attention window size.
+    """
+
+    @property
+    def type_id(self) -> str:
+        prefix = "chunked_local_attention"
+        return (f"{prefix}_{self.block_size}_{self.page_size_bytes}")
+
+    def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:
+        max_model_len = vllm_config.model_config.max_model_len
+        max_num_batched_tokens = (
+            vllm_config.scheduler_config.max_num_batched_tokens)
+
+        # During chunked prefill, we allocate KV cache for at most
+        # `self.attention_chunk_size` computed tokens plus the newly scheduled
+        # tokens. And we won't allocate KV cache for more than `max_model_len`
+        # tokens.
+        num_tokens = min(self.attention_chunk_size + max_num_batched_tokens,
+                         max_model_len)
+        print(f"{num_tokens=}")
+
+        # +1 here because the sliding window may not start from the beginning
+        # of the block. For example, if the block size is 4 and num_token
+        # is 4, we need two blocks [XXCD] [EF] to store the sliding
+        # window [CDEF] of 6 tokens.
+        return (cdiv(num_tokens, self.block_size) + 1) * self.page_size_bytes
+
+    @classmethod
+    def merge(cls, specs: list[Self]) -> Self:
+        """
+        Merge a list of ChunkedLocalAttentionSpec objects into a single 
+        ChunkedLocalAttentionSpec object.
+        """
+        merged_spec = super().merge(specs)
+        attention_chunk_size = set(spec.attention_chunk_size for spec in specs
+                                   if spec.attention_chunk_size is not None)
+        if len(attention_chunk_size) == 0:
+            merged_spec.attention_chunk_size = 0
+        elif len(attention_chunk_size) == 1:
+            merged_spec.attention_chunk_size = attention_chunk_size.pop()
+        else:
+            raise ValueError(
+                "All chunked local attention layers in the same KV cache group "
+                "must have the same chunk size.")
+        return merged_spec
+
+
+@dataclass
 class SlidingWindowSpec(AttentionSpec):
     sliding_window: int
 
