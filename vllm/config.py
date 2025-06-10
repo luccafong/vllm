@@ -1630,6 +1630,8 @@ class LoadFormat(str, enum.Enum):
     RUNAI_STREAMER = "runai_streamer"
     RUNAI_STREAMER_SHARDED = "runai_streamer_sharded"
     FASTSAFETENSORS = "fastsafetensors"
+    LLAMA_CONSOLIDATED = "llama_consolidated"
+    LLAMA_UNIFIED = "llama_unified"
 
 
 @config
@@ -1714,6 +1716,7 @@ class LoadConfig:
                 self.ignore_patterns)
         else:
             self.ignore_patterns = ["original/**/*"]
+        logger.info("[qqzz] load_format=%s", self.load_format)
 
 
 DistributedExecutorBackend = Literal["ray", "mp", "uni", "external_launcher"]

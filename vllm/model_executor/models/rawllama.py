@@ -1,27 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-
-# Adapted from
-# https://github.com/huggingface/transformers/blob/v4.28.0/src/transformers/models/llama/modeling_llama.py
-# Copyright 2023 The vLLM team.
-# Copyright 2022 EleutherAI and the HuggingFace Inc. team. All rights reserved.
-#
-# This code is based on EleutherAI's GPT-NeoX library and the GPT-NeoX
-# and OPT implementations in this library. It has been modified from its
-# original forms to accommodate minor architectural differences compared
-# to GPT-NeoX and OPT used by the Meta AI team that trained the model.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Inference-only LLaMA model compatible with HuggingFace weights."""
+"""Inference-only LLama model compatible with Meta unified weights."""
 from collections.abc import Iterable
 from typing import Any, Optional, Union
 
@@ -33,6 +11,7 @@ from vllm.attention import Attention, AttentionType
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, VllmConfig
 from vllm.distributed import get_pp_group, get_tensor_model_parallel_world_size
+from vllm.logger import init_logger
 from vllm.model_executor.layers.activation import SiluAndMul
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (MergedColumnParallelLinear,
@@ -53,6 +32,15 @@ from .utils import (AutoWeightsLoader, PPMissingLayer, extract_layer_index,
                     is_pp_missing_parameter,
                     make_empty_intermediate_tensors_factory, make_layers,
                     maybe_prefix)
+
+logger = init_logger(__name__)
+
+
+def permute(name, w, n_heads, dim1, dim2):
+    logger.info(
+        f"\t\t\t permute {name=}, {w.shape=}, {n_heads=}, {dim1=}, {dim2=}")
+    return (w.view(n_heads, dim1 // n_heads // 2, 2,
+                   dim2).transpose(1, 2).reshape(dim1, dim2))
 
 
 class LlamaMLP(nn.Module):
@@ -250,7 +238,7 @@ class LlamaDecoderLayer(nn.Module):
         if hasattr(config, 'qkv_bias'):
             attention_bias = config.qkv_bias
 
-        # By default, Llama uses causal attention as it is decoder-only.
+        # By default, Llama uses causal attention as it is a decoder-only model.
         # You can override the HF config with `is_causal=False` to enable
         # bidirectional attention, which is used in some embedding models
         # (e.g. parasail-ai/GritLM-7B-vllm)
@@ -482,29 +470,6 @@ class RawLlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP):
     }
     embedding_padding_modules = ["lm_head"]
 
-    # Mistral/Llama models can also be loaded with --load-format mistral
-    # from consolidated.safetensors checkpoints
-    mistral_mapping = {
-        "layers": "model.layers",
-        "attention": "self_attn",
-        "qscale_act": "input_scale",
-        "qscale_weight": "weight_scale",
-        "kv_fake_quantizer.qscale_act": "kv_scale",
-        "wq": "q_proj",
-        "wk": "k_proj",
-        "wv": "v_proj",
-        "wo": "o_proj",
-        "attention_norm": "input_layernorm",
-        "feed_forward": "mlp",
-        "w1": "gate_proj",
-        "w2": "down_proj",
-        "w3": "up_proj",
-        "ffn_norm": "post_attention_layernorm",
-        "tok_embeddings": "model.embed_tokens",
-        "output": "lm_head",
-        "norm": "model.norm",
-    }
-
     def __init__(self,
                  *,
                  vllm_config: VllmConfig,
@@ -555,10 +520,6 @@ class RawLlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP):
     def set_aux_hidden_state_layers(self, layers: tuple[int]) -> None:
         self.model.aux_hidden_state_layers = layers
 
-    def get_eagle3_aux_hidden_state_layers(self) -> tuple[int]:
-        num_layers = len(self.model.layers)
-        return (2, num_layers // 2, num_layers - 3)
-
     def _init_model(self,
                     vllm_config: VllmConfig,
                     prefix: str = "",
@@ -597,47 +558,44 @@ class RawLlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP):
             skip_prefixes=(["lm_head."]
                            if self.config.tie_word_embeddings else None),
         )
-        return loader.load_weights(
-            self.maybe_remap_mistral(name, loaded_weight)
-            for name, loaded_weight in weights)
-
-    # This function is used to remap the mistral format as
-    # used by Mistral and Llama <=2
-    def maybe_remap_mistral(
-        self,
-        name: str,
-        loaded_weight: torch.Tensor,
-    ) -> tuple[str, torch.Tensor]:
-
-        def permute(w: torch.Tensor, n_heads: int):
-            attn_in = self.config.head_dim * n_heads
-            attn_out = self.config.hidden_size
-
-            return w.view(n_heads, attn_in // n_heads // 2, 2,
-                          attn_out).transpose(1, 2).reshape(attn_in, attn_out)
-
-        mapping = self.mistral_mapping
-        modules = name.split(".")
-
-        # rotary embeds should be sliced
-        if "wk" in modules and modules[-1] == "weight":
-            loaded_weight = permute(loaded_weight,
-                                    self.config.num_key_value_heads)
-        elif "wq" in modules and modules[-1] == "weight":
-            loaded_weight = permute(loaded_weight,
-                                    self.config.num_attention_heads)
-
-        num_modules = len(modules)
-        for i in range(num_modules):
-            item = modules[i]
-            next_item = modules[i + 1] if i < num_modules - 1 else None
-
-            combined_item = (f"{item}.{next_item}"
-                             if next_item is not None else None)
-
-            if combined_item in mapping:
-                name = name.replace(combined_item, mapping[combined_item])
-            elif item in mapping and mapping[item] not in name:
-                name = name.replace(item, mapping[item])
-
-        return name, loaded_weight
+        unified_to_vllm_map = {
+            ".feed_forward.w1.": ".mlp.gate_proj.",
+            ".feed_forward.w3.": ".mlp.up_proj.",
+            ".feed_forward.w2.": ".mlp.down_proj.",
+            ".ffn_norm.": ".post_attention_layernorm.",
+            ".attention.wo.": ".self_attn.o_proj.",
+            ".attention.wq.": ".self_attn.q_proj.",
+            ".attention.wk.": ".self_attn.k_proj.",
+            ".attention.wv.": ".self_attn.v_proj.",
+            ".attention_norm.": ".input_layernorm.",
+            "tok_embeddings.": "model.embed_tokens.",
+            "output.": "lm_head.",
+        }
+        weights_to_load = []
+        for name, tensor in weights:
+            if name.startswith("layers.") or name.startswith("norm."):
+                name = "model." + name
+            for unified_name, vllm_name in unified_to_vllm_map.items():
+                if unified_name in name:
+                    name = name.replace(unified_name, vllm_name)
+                    break
+            if ".self_attn.q_proj." in name:
+                tensor = permute(
+                    name=name,
+                    w=tensor,
+                    n_heads=self.config.num_attention_heads,
+                    dim1=self.config.head_dim *
+                    self.config.num_attention_heads,
+                    dim2=self.config.hidden_size,
+                )
+            elif ".self_attn.k_proj." in name:
+                tensor = permute(
+                    name=name,
+                    w=tensor,
+                    n_heads=self.config.num_key_value_heads,
+                    dim1=self.config.head_dim *
+                    self.config.num_key_value_heads,
+                    dim2=self.config.hidden_size,
+                )
+            weights_to_load.append((name, tensor))
+        return loader.load_weights(weights_to_load)

@@ -491,6 +491,7 @@ class LLMEngine:
     ) -> "LLMEngine":
         """Creates an LLM engine from the engine arguments."""
         # Create the engine configs.
+        logger.info("[qqzz] engine_args=%s", engine_args)
         vllm_config = engine_args.create_engine_config(usage_context)
 
         engine_cls = cls

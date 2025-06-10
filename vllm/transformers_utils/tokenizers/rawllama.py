@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
 
 import tiktoken
+from transformers.utils.chat_template_utils import render_jinja_template
 
 from vllm.logger import init_logger
 from vllm.transformers_utils.tokenizer_base import TokenizerBase
@@ -147,6 +148,10 @@ class RawLlamaTokenizer(TokenizerBase):
                 f"Tokenizer model file not found: {model_path}")
 
         mergeable_ranks = load_bpe_file(model_path)
+        self.id_to_tokens = {
+            v: k.decode("ISO-8859-1")
+            for k, v in mergeable_ranks.items()
+        }
         num_base_tokens = len(mergeable_ranks)
 
         special_tokens = BASIC_SPECIAL_TOKENS + LLAMA4_SPECIAL_TOKENS
@@ -227,7 +232,7 @@ class RawLlamaTokenizer(TokenizerBase):
 
     @property
     def is_fast(self) -> bool:
-        raise NotImplementedError()
+        return True
 
     @property
     def vocab_size(self) -> int:
@@ -313,10 +318,18 @@ class RawLlamaTokenizer(TokenizerBase):
                             messages: list["ChatCompletionMessageParam"],
                             tools: Optional[list[dict[str, Any]]] = None,
                             **kwargs) -> list[int]:
-        raise NotImplementedError()
+        conversation = []
+        for message in messages:
+            for k, v in message.items():
+                conversation.append({k: str(v)})
+        rendered_chat, generation_indices = render_jinja_template(
+            conversations=[conversation],
+            tools=tools,
+        )
+        return self.encode(rendered_chat)
 
     def convert_tokens_to_string(self, tokens: list[str]) -> str:
-        raise NotImplementedError()
+        return "".join(tokens)
 
     def decode(self,
                ids: Union[list[int], int],
@@ -330,7 +343,7 @@ class RawLlamaTokenizer(TokenizerBase):
         ids: list[int],
         skip_special_tokens: bool = True,
     ) -> list[str]:
-        raise NotImplementedError()
+        return [self.id_to_tokens[i] for i in ids]
 
     @staticmethod
     def _split_whitespaces_or_nonwhitespaces(

@@ -8,9 +8,8 @@ TokenizerRegistry.register("rawllama_tokenizer",
 
 prompts = [
     "Hello, my name is",
-    "The president of the United States is",
-    "The capital of France is",
-    "The future of AI is",
+    "The future of AI",
+    "Do you like XLFormers code?",
 ]
 sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
 llm = LLM(
@@ -18,6 +17,8 @@ llm = LLM(
     # "/data/local/models/arpg_1b/l4_200k_base"
     tokenizer="rawllama_tokenizer",
     tokenizer_mode="custom",
+    trust_remote_code=True,
+    load_format="llama_unified",
 )
 outputs = llm.generate(prompts, sampling_params)
 for output in outputs:

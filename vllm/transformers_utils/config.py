@@ -38,10 +38,11 @@ from vllm.transformers_utils.configs import (ChatGLMConfig, Cohere2Config,
                                              MiniMaxVL01Config, MllamaConfig,
                                              MLPSpeculatorConfig, MPTConfig,
                                              NemotronConfig, NVLM_D_Config,
-                                             OvisConfig, RawLlamaConfig,
-                                             RWConfig, SkyworkR1VChatConfig,
-                                             SolarConfig, Telechat2Config,
-                                             UltravoxConfig)
+                                             OvisConfig, RWConfig,
+                                             SkyworkR1VChatConfig, SolarConfig,
+                                             Telechat2Config, UltravoxConfig)
+from vllm.transformers_utils.configs.llama_unified import (
+    load_llama_unified_config)
 # yapf: enable
 from vllm.transformers_utils.utils import check_gguf_file
 from vllm.utils import resolve_obj_by_qualname
@@ -80,7 +81,6 @@ _CONFIG_REGISTRY: dict[str, type[PretrainedConfig]] = {
     "nemotron": NemotronConfig,
     "NVLM_D": NVLM_D_Config,
     "ovis": OvisConfig,
-    "rawllama": RawLlamaConfig,
     "solar": SolarConfig,
     "skywork_chat": SkyworkR1VChatConfig,
     "telechat": Telechat2Config,
@@ -93,6 +93,7 @@ class ConfigFormat(str, enum.Enum):
     AUTO = "auto"
     HF = "hf"
     MISTRAL = "mistral"
+    LLAMA_UNIFIED = "llama_unified"
 
 
 _R = TypeVar("_R")
@@ -292,6 +293,10 @@ def get_config(
                                      MISTRAL_CONFIG_NAME,
                                      revision=revision):
                 config_format = ConfigFormat.MISTRAL
+            elif file_or_path_exists(model,
+                                     "sharded_params.json",
+                                     revision=revision):
+                config_format = ConfigFormat.LLAMA_UNIFIED
             else:
                 raise ValueError(
                     "Could not detect config format for no config file found. "
@@ -315,6 +320,7 @@ def get_config(
 
             raise ValueError(error_message) from e
 
+    logger.info("[qqzz] config_format: %s", config_format)
     if config_format == ConfigFormat.HF:
         config_dict, _ = PretrainedConfig.get_config_dict(
             model,
@@ -361,6 +367,8 @@ def get_config(
 
     elif config_format == ConfigFormat.MISTRAL:
         config = load_params_config(model, revision, **kwargs)
+    elif config_format == ConfigFormat.LLAMA_UNIFIED:
+        config = load_llama_unified_config(model, revision, **kwargs)
     else:
         supported_formats = [
             fmt.value for fmt in ConfigFormat if fmt != ConfigFormat.AUTO

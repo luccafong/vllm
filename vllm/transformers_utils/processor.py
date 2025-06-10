@@ -68,13 +68,20 @@ def get_processor(
                          isinstance(processor_cls, tuple) else processor_cls)
 
     try:
-        processor = processor_factory.from_pretrained(
-            processor_name,
-            *args,
-            revision=revision,
-            trust_remote_code=trust_remote_code,
-            **kwargs,
-        )
+        from vllm.logger import init_logger
+        logger = init_logger(__name__)
+        logger.info("[qqzz] processor_name=%s, args=%s, kwargs=%s",
+                    processor_name, args, kwargs)
+        processor = AutoProcessor.from_pretrained(
+            "meta-llama/Llama-4-Scout-17B-16E-Instruct")
+        # processor_name += "/mllama"
+        # processor = processor_factory.from_pretrained(
+        #     processor_name,
+        #     *args,
+        #     revision=revision,
+        #     trust_remote_code=trust_remote_code,
+        #     **kwargs,
+        # )
     except ValueError as e:
         # If the error pertains to the processor class not existing or not
         # currently being imported, suggest using the --trust-remote-code flag.
