@@ -138,8 +138,7 @@ class ChunkedLocalAttentionSpec(AttentionSpec):
 
     @property
     def type_id(self) -> str:
-        prefix = "chunked_local_attention"
-        return (f"{prefix}_{self.block_size}_{self.page_size_bytes}")
+        return (f"local_attention_{self.block_size}_{self.page_size_bytes}")
 
     def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:
         max_model_len = vllm_config.model_config.max_model_len
@@ -152,7 +151,6 @@ class ChunkedLocalAttentionSpec(AttentionSpec):
         # tokens.
         num_tokens = min(self.attention_chunk_size + max_num_batched_tokens,
                          max_model_len)
-        print(f"{num_tokens=}")
 
         # +1 here because the sliding window may not start from the beginning
         # of the block. For example, if the block size is 4 and num_token

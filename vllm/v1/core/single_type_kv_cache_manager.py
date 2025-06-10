@@ -406,17 +406,17 @@ class ChunkedLocalAttentionManager(SingleTypeKVCacheManager):
     @classmethod
     def find_longest_cache_hit(
         cls,
-        block_hashes: list[BlockHash],
+        block_hashes: list[BlockHashType],
         max_length: int,
         kv_cache_group_ids: list[int],
         block_pool: BlockPool,
         kv_cache_spec: KVCacheSpec,
         use_eagle: bool,
     ) -> list[list[KVCacheBlock]]:
-        print(f"finding longeset cache hit for"
-              f"{len(block_hashes)=}, {max_length=}, "
-              f"{kv_cache_group_ids=},"
-              f"{kv_cache_spec=}, {use_eagle=}")
+        # print(f"finding longeset cache hit for"
+        #       f"{len(block_hashes)=}, {max_length=}, "
+        #       f"{kv_cache_group_ids=},"
+        #       f"{kv_cache_spec=}, {use_eagle=}")
         assert isinstance(kv_cache_spec, ChunkedLocalAttentionSpec), (
             "ChunkedLocalAttentionManager can only be used for " +
             "chunked local attentiongroups")
@@ -431,7 +431,7 @@ class ChunkedLocalAttentionManager(SingleTypeKVCacheManager):
         computed_blocks: list[list[KVCacheBlock]] = [
             [block_pool.null_block] * local_attention_start_block_idx for _ in range(len(kv_cache_group_ids))
         ]
-        print(f"{len(computed_blocks[0])=} before look up")
+        # print(f"{len(computed_blocks[0])=} before look up")
         for i in range(local_attention_start_block_idx, max_num_blocks):
             block_hash = block_hashes[i]
             if cached_block := block_pool.get_cached_block(
@@ -444,7 +444,6 @@ class ChunkedLocalAttentionManager(SingleTypeKVCacheManager):
         if use_eagle and len(computed_blocks[0]) > 0:
             for j in range(len(kv_cache_group_ids)):
                 computed_blocks[j].pop()
-        print(f"{len(computed_blocks[0])=} for {max_length=}")
         return computed_blocks
 
     def remove_skipped_blocks(self, request_id: str,
@@ -473,7 +472,6 @@ class ChunkedLocalAttentionManager(SingleTypeKVCacheManager):
             removed_blocks.append(blocks[i])
             blockids.append(i)
             blocks[i] = self._null_block
-        print(f"removed blocks {blockids=} for {num_computed_tokens=}, {request_id=}")
         self.block_pool.free_blocks(removed_blocks)
 
     def get_num_common_prefix_blocks(self, request_id: str,
