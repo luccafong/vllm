@@ -632,6 +632,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     common_prefix_len=common_prefix_len,
                     common_attn_metadata=common_attn_metadata))
             for layer_name in kv_cache_group_spec.layer_names:
+                print(f"{layer_name} attn_metadata_i: {kv_cache_group_id=}")
                 attn_metadata[layer_name] = attn_metadata_i
 
         use_spec_decode = len(
@@ -742,6 +743,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         use_sliding_window = (isinstance(kv_cache_spec, SlidingWindowSpec) or
                               (isinstance(kv_cache_spec, FullAttentionSpec)
                                and kv_cache_spec.sliding_window is not None))
+        use_local_attention = isinstance(kv_cache_spec, ChunkedLocalAttentionSpec)
         assert isinstance(kv_cache_spec, AttentionSpec)
         use_cascade = attn_metadata_builder.use_cascade_attention(
             common_prefix_len=common_prefix_len,
@@ -749,9 +751,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             num_query_heads=self.num_query_heads,
             num_kv_heads=kv_cache_spec.num_kv_heads,
             use_alibi=self.use_alibi,
+            use_local_attention=use_local_attention,
             use_sliding_window=use_sliding_window,
             num_sms=self.num_sms,
         )
+        print(f"{use_cascade=}")
         return common_prefix_len if use_cascade else 0
 
     def _calc_mrope_positions(self, scheduler_output: "SchedulerOutput"):
@@ -1863,6 +1867,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                         f"{flash_attn_version}.")
 
             block_table_i = self.input_batch.block_table[i]
+            print(f"{block_table_i=}")
             attn_metadata_builder_i = attn_backend_i.get_builder_cls()(
                 weakref.proxy(self), kv_cache_spec, block_table_i)
             self.attn_backends.append(attn_backend_i)
@@ -1989,6 +1994,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         block_size = self.vllm_config.cache_config.block_size
         use_mla = self.vllm_config.model_config.use_mla
         kv_cache_spec: dict[str, KVCacheSpec] = {}
+        print(f"{self.attention_chunk_size=}")
         for layer_name, attn_module in layers.items():
             # TODO: Support other attention modules, e.g., cross-attention
             if attn_module.attn_type == AttentionType.DECODER:
@@ -2009,6 +2015,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                         head_size=attn_module.head_size,
                         dtype=self.kv_cache_dtype,
                         attention_chunk_size=self.attention_chunk_size,
+                        sliding_window=self.attention_chunk_size,
                         use_mla=use_mla)
                 else:
                     kv_cache_spec[layer_name] = FullAttentionSpec(

@@ -569,6 +569,7 @@ class Scheduler(SchedulerInterface):
         new_block_ids: list[list[int]],
         resumed_from_preemption: bool,
     ) -> CachedRequestData:
+        print(f"{new_block_ids=}")
         # OPTIMIZATION: Cache the CachedRequestData objects to avoid creating
         # them at each scheduling step.
         num_computed_tokens = request.num_computed_tokens

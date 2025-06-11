@@ -594,6 +594,11 @@ def create_kv_cache_group_specs(
         merged_layer_spec = layer_specs[0].merge(layer_specs)
         kv_cache_groups.append(
             KVCacheGroupSpec(layer_names_one_group, merged_layer_spec))
+    
+    # Sort the kv cache groups by the type_id of their KV cache spec.
+    # This can avoid the inconsistency caused by the order of groups.
+    kv_cache_groups.sort(key=lambda x: x.kv_cache_spec.type_id)
+    print(f"{kv_cache_groups=}")
     return kv_cache_groups
 
 
@@ -609,6 +614,7 @@ def is_kv_cache_type_uniform(kv_cache_spec: dict[str, KVCacheSpec]) -> bool:
     """
 
     layer_keys = set(layer.type_id for layer in kv_cache_spec.values())
+    print(f"{layer_keys=}")
     return len(layer_keys) == 1
 
 
@@ -683,6 +689,7 @@ def _get_kv_cache_config_uniform_type(vllm_config: VllmConfig,
     )
 
     per_layer_size = page_size * num_blocks
+    print(f"{per_layer_size=}")
     # All layers have the same KV cache spec, so we create one kv cache group
     # for all layers.
     grouped_layer_names = [list(kv_cache_spec.keys())]
@@ -692,6 +699,7 @@ def _get_kv_cache_config_uniform_type(vllm_config: VllmConfig,
         KVCacheTensor(size=per_layer_size, shared_by=[layer_name])
         for layer_name in kv_cache_spec
     ]
+    print(f"{kv_cache_tensors=}")
 
     kv_cache_config = KVCacheConfig(
         num_blocks=num_blocks,
@@ -735,13 +743,14 @@ def _get_kv_cache_config_uniform_page_size(
     same_type_layers: dict[str, list[str]] = defaultdict(list)
     for layer_name, layer_spec in kv_cache_spec.items():
         same_type_layers[layer_spec.type_id].append(layer_name)
-
+    print(f"{same_type_layers=}")
     # Split each group into smaller groups, to make the number of layers in each
     # group identical. Add padding to the last group of each type if necessary.
     # E.g., (full.0, full.1), (sw.0, sw.1, sw.2)
     # split to 3 groups with 2 layers each:
     # (full.0, full.1), (sw.0, sw.1), (sw.2, padding).
     group_size = min([len(layers) for layers in same_type_layers.values()])
+    print(f"{group_size=}")
     grouped_layers = []
     for layers in same_type_layers.values():
         num_padding_layers = group_size - len(layers) % group_size
@@ -755,7 +764,7 @@ def _get_kv_cache_config_uniform_page_size(
             grouped_layers.append(layers[i:i + group_size])
     kv_cache_groups = create_kv_cache_group_specs(kv_cache_spec,
                                                   grouped_layers)
-
+    
     # Determine how model runners should initialize the KV cache tensors.
     # We will have group_size memory pools, each is shared by one layer from
     # each group. As layers of different groups have different block table,
@@ -764,16 +773,18 @@ def _get_kv_cache_config_uniform_page_size(
     # full.0, sw.0, sw.2: share a Tensor with size=available_memory//2
     # full.1, sw.1: share another Tensor with size=available_memory//2
     page_size = get_uniform_page_size(kv_cache_spec)
-    # print(f"{page_size=}, {group_size=}")
+    print(f"{page_size=}, {group_size=}")
     num_blocks = get_num_blocks(vllm_config, group_size, available_memory,
                                 page_size)
+
     per_memory_pool_size = page_size * num_blocks
+    print(f"{num_blocks=}, {group_size=}, {per_memory_pool_size=}")
     kv_cache_tensors = []
     for i in range(group_size):
         shared_by = []
         for j in range(len(kv_cache_groups)):
-            if i < len(grouped_layers[j]):
-                shared_by.append(grouped_layers[j][i])
+            if i < len(kv_cache_groups[j].layer_names):
+                shared_by.append(kv_cache_groups[j].layer_names[i])
         kv_cache_tensors.append(
             KVCacheTensor(size=per_memory_pool_size, shared_by=shared_by))
 
@@ -812,6 +823,7 @@ def unify_hybrid_kv_cache_specs(kv_cache_spec: dict[str, KVCacheSpec]):
     def is_hybrid(kv_cache_spec: dict[str, KVCacheSpec]) -> bool:
         type_ids = set(layer_spec.type_id
                        for layer_spec in kv_cache_spec.values())
+        print(f"{type_ids=}")
         return len(type_ids) > 1
 
     if not is_hybrid(kv_cache_spec):
@@ -902,12 +914,6 @@ def unify_kv_cache_configs(kv_cache_configs: list[KVCacheConfig]):
         kv_cache_configs: The KV cache configurations for each worker. Will be
             in-place modified to make them consistent.
     """
-
-    # Sort the kv cache groups by the type_id of their KV cache spec.
-    # This can avoid the inconsistency caused by the order of groups.
-    for kv_cache_config in kv_cache_configs:
-        kv_cache_config.kv_cache_groups.sort(
-            key=lambda x: x.kv_cache_spec.type_id)
 
     # Verify that the groups of each rank are the same.
     for kv_cache_config in kv_cache_configs[1:]:

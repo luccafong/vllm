@@ -97,6 +97,7 @@ class SingleTypeKVCacheManager(ABC):
             # A new request.
             req_blocks = self.req_to_blocks[request_id]
             assert len(req_blocks) == 0
+            print(f"{new_computed_blocks=}")
             req_blocks.extend(new_computed_blocks)
             self.num_cached_block[request_id] = len(new_computed_blocks)
         else:
@@ -256,8 +257,8 @@ class FullAttentionManager(SingleTypeKVCacheManager):
         kv_cache_spec: KVCacheSpec,
         use_eagle: bool,
     ) -> list[list[KVCacheBlock]]:
-        assert isinstance(kv_cache_spec, FullAttentionSpec), (
-            "FullAttentionManager can only be used for full attention groups")
+        # assert isinstance(kv_cache_spec, FullAttentionSpec), (
+        #     "FullAttentionManager can only be used for full attention groups")
         computed_blocks: list[list[KVCacheBlock]] = [
             [] for _ in range(len(kv_cache_group_ids))
         ]
@@ -302,6 +303,7 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
         super().__init__(kv_cache_spec, block_pool, **kwargs)
         self.sliding_window = kv_cache_spec.sliding_window
         self._null_block = block_pool.null_block
+        print(f"{self.kv_cache_group_id=}")
 
     @classmethod
     def find_longest_cache_hit(
@@ -313,8 +315,8 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
         kv_cache_spec: KVCacheSpec,
         use_eagle: bool,
     ) -> list[list[KVCacheBlock]]:
-        assert isinstance(kv_cache_spec, SlidingWindowSpec), (
-            "SlidingWindowManager can only be used for sliding window groups")
+        # assert isinstance(kv_cache_spec, SlidingWindowSpec), (
+        #     "SlidingWindowManager can only be used for sliding window groups")
 
         # The number of contiguous blocks needed for prefix cache hit.
         # -1 since the input token itself is also included in the window
@@ -338,6 +340,7 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
         num_contiguous_blocks = 0
         match_found = False
         # Search from right to left and early stop when a match is found.
+        print(f"get cache for {kv_cache_group_ids=}")
         for i in range(max_num_blocks - 1, -1, -1):
             if cached_block := block_pool.get_cached_block(
                     block_hashes[i], kv_cache_group_ids):
@@ -413,10 +416,56 @@ class ChunkedLocalAttentionManager(SingleTypeKVCacheManager):
         kv_cache_spec: KVCacheSpec,
         use_eagle: bool,
     ) -> list[list[KVCacheBlock]]:
-        # print(f"finding longeset cache hit for"
-        #       f"{len(block_hashes)=}, {max_length=}, "
-        #       f"{kv_cache_group_ids=},"
-        #       f"{kv_cache_spec=}, {use_eagle=}")
+        # The number of contiguous blocks needed for prefix cache hit.
+        # -1 since the input token itself is also included in the window
+        sliding_window_contiguous_blocks = cdiv(
+            kv_cache_spec.attention_chunk_size - 1, kv_cache_spec.block_size)
+        if use_eagle:
+            # Need to drop the last matched block if eagle is enabled. For
+            # sliding window layer, we achieve this by increasing the number of
+            # contiguous blocks needed for prefix cache hit by one and dropping
+            # the last matched block.
+            sliding_window_contiguous_blocks += 1
+
+        # TODO: reduce i by sliding_window_contiguous_blocks when cache miss, to
+        # optimize the time complexity from O(len(block_hashes)) to
+        # O(len(block_hashes) / sliding_window_contiguous_blocks +
+        # sliding_window_contiguous_blocks),
+        # which is good for low cache hit rate scenarios.
+        max_num_blocks = max_length // kv_cache_spec.block_size
+        computed_blocks = [[block_pool.null_block] * max_num_blocks
+                           for _ in range(len(kv_cache_group_ids))]
+        num_contiguous_blocks = 0
+        match_found = False
+        # Search from right to left and early stop when a match is found.
+        for i in range(max_num_blocks - 1, -1, -1):
+            if cached_block := block_pool.get_cached_block(
+                    block_hashes[i], kv_cache_group_ids):
+                for j in range(len(kv_cache_group_ids)):
+                    computed_blocks[j][i] = cached_block[j]
+                num_contiguous_blocks += 1
+                if (num_contiguous_blocks >= sliding_window_contiguous_blocks):
+                    # Trim the trailing blocks.
+                    # E.g., [NULL, NULL, 8, 3, NULL, 9] -> [NULL, NULL, 8, 3]
+                    # when sliding_window_contiguous_blocks=2.
+                    for j in range(len(kv_cache_group_ids)):
+                        del computed_blocks[j][i + num_contiguous_blocks:]
+                    match_found = True
+                    break
+            else:
+                num_contiguous_blocks = 0
+        if not match_found:
+            # The first `num_contiguous_blocks` is a cache hit even if
+            # `num_contiguous_blocks < sliding_window_contiguous_blocks`.
+            for j in range(len(kv_cache_group_ids)):
+                del computed_blocks[j][num_contiguous_blocks:]
+        if use_eagle and len(computed_blocks) > 0:
+            for j in range(len(kv_cache_group_ids)):
+                computed_blocks[j].pop()
+        return computed_blocks
+        print(f"finding longeset cache hit for"
+              f"{len(block_hashes)=}, {max_length=}, "
+              f"{kv_cache_group_ids=},")
         assert isinstance(kv_cache_spec, ChunkedLocalAttentionSpec), (
             "ChunkedLocalAttentionManager can only be used for " +
             "chunked local attentiongroups")
@@ -431,16 +480,17 @@ class ChunkedLocalAttentionManager(SingleTypeKVCacheManager):
         computed_blocks: list[list[KVCacheBlock]] = [
             [block_pool.null_block] * local_attention_start_block_idx for _ in range(len(kv_cache_group_ids))
         ]
-        # print(f"{len(computed_blocks[0])=} before look up")
+        print(f"{len(computed_blocks[0])=} before look up")
         for i in range(local_attention_start_block_idx, max_num_blocks):
             block_hash = block_hashes[i]
             if cached_block := block_pool.get_cached_block(
                     block_hash, kv_cache_group_ids):
-                # print(f"found cached block {cached_block=} for block {i}")
+                print(f"found cached block {cached_block=} for block {i}")
                 for j in range(len(kv_cache_group_ids)):
                     computed_blocks[j].append(cached_block[j])
             else:
                 break
+        print(f"{len(computed_blocks[0])=} after look up")
         if use_eagle and len(computed_blocks[0]) > 0:
             for j in range(len(kv_cache_group_ids)):
                 computed_blocks[j].pop()
@@ -454,7 +504,20 @@ class ChunkedLocalAttentionManager(SingleTypeKVCacheManager):
         # (N+1) // chunk_size * chunk_size
         # [chunk 0][chunk 1]local_attention_start_idx ... current
 
-
+        last_useful_token = num_computed_tokens - self.attention_chunk_size + 1
+        last_useful_block = last_useful_token // self.block_size
+        blocks = self.req_to_blocks[request_id]
+        removed_blocks: list[KVCacheBlock] = []
+        for i in range(last_useful_block - 1, -1, -1):
+            if blocks[i] == self._null_block:
+                # If the block is already a null block, the blocks before it
+                # should also have been set to null blocks by the previous calls
+                # to this function.
+                break
+            removed_blocks.append(blocks[i])
+            blocks[i] = self._null_block
+        self.block_pool.free_blocks(removed_blocks)
+        return 
         local_attention_start_idx = (
             num_computed_tokens - 1) // self.attention_chunk_size * self.attention_chunk_size
         # 1024-> 0, 1025-> 1024
@@ -488,7 +551,7 @@ class ChunkedLocalAttentionManager(SingleTypeKVCacheManager):
 spec_manager_map: dict[type[KVCacheSpec], type[SingleTypeKVCacheManager]] = {
     FullAttentionSpec: FullAttentionManager,
     SlidingWindowSpec: SlidingWindowManager,
-    ChunkedLocalAttentionSpec: ChunkedLocalAttentionManager,
+    ChunkedLocalAttentionSpec: SlidingWindowManager,
 }
 
 

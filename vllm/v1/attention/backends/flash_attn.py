@@ -339,7 +339,7 @@ class FlashAttentionMetadataBuilder:
         block_table.slot_mapping[num_actual_tokens:].fill_(-1)
 
         slot_mapping = block_table.slot_mapping[:num_actual_tokens]
-
+        self.aot_schedule = False
         if self.aot_sliding_window is None:
             self.aot_sliding_window = (-1, -1)
             # For the AOT scheduler we need the sliding window value to be
@@ -679,6 +679,7 @@ def use_cascade_attention(
     num_kv_heads: int,
     use_alibi: bool,
     use_sliding_window: bool,
+    use_local_attention: bool,
     num_sms: int,
 ) -> bool:
     """Decide whether to use cascade attention.
@@ -694,7 +695,7 @@ def use_cascade_attention(
     if common_prefix_len < 256:
         return False
     # Cascade attention is currently not supported with these variants.
-    if use_alibi or use_sliding_window:
+    if use_alibi or use_sliding_window or use_local_attention:
         return False
     # Too few queries. Probably not worth using cascade attention.
     # We use an arbitrary threshold of 8 queries. TODO: Tune this threshold.

@@ -110,6 +110,7 @@ class MultiGroupBlockTable:
             cdiv(max_model_len, g.kv_cache_spec.block_size)
             for g in kv_cache_config.kv_cache_groups
         ]
+        print(f"{kv_cache_config.kv_cache_groups=}")
         self.block_tables = [
             BlockTable(max_num_reqs, max_num_blocks_per_req[i],
                        max_num_batched_tokens, pin_memory, device)

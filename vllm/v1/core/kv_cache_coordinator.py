@@ -46,6 +46,7 @@ class KVCacheCoordinator:
                     kv_cache_group_id=i,
                     caching_hash_fn=caching_hash_fn,
                 ))
+        print(f"{self.single_type_managers=}")
 
     def get_num_blocks_to_allocate(
             self, request_id: str, num_tokens: int,
@@ -64,6 +65,7 @@ class KVCacheCoordinator:
             The number of blocks.
         """
         num_blocks_to_allocate = 0
+        print(f"{len(self.single_type_managers)=}")
         for i, manager in enumerate(self.single_type_managers):
             num_blocks_to_allocate += manager.get_num_blocks_to_allocate(
                 request_id, num_tokens, new_computed_blocks[i])
@@ -206,6 +208,10 @@ class SingleGroupKVCacheCoordinator(KVCacheCoordinator):
             kv_cache_spec=self.kv_cache_spec,
             use_eagle=self.use_eagle,
         )
+        hit_length = len(hit_blocks) * self.block_size
+
+        print(f"Full KV {hit_length=}")
+
         return hit_blocks, len(hit_blocks[0]) * self.block_size
 
 
@@ -234,6 +240,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
         """
         groups_by_type_id: dict[str, list[int]] = defaultdict(list)
         full_attention_type_ids: set[str] = set()
+        print(f"{self.kv_cache_config.kv_cache_groups=}")
         for i, g in enumerate(self.kv_cache_config.kv_cache_groups):
             groups_by_type_id[g.kv_cache_spec.type_id].append(i)
             if isinstance(g.kv_cache_spec, FullAttentionSpec):
@@ -246,11 +253,14 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
             "find_longest_cache_hit assumes hybrid models have exactly "
             "one other type of groups except full attention now")
 
+        print(f"{groups_by_type_id=}")
         self.full_attention_group_ids = groups_by_type_id[next(
             iter(full_attention_type_ids))]
         self.other_group_ids = groups_by_type_id[next(
             iter(groups_by_type_id.keys() - full_attention_type_ids))]
 
+        print(f"{self.full_attention_group_ids=}")
+        print(f"{self.other_group_ids=}")
         self.full_attention_spec = self.kv_cache_config.kv_cache_groups[
             self.full_attention_group_ids[0]].kv_cache_spec
         self.other_spec = self.kv_cache_config.kv_cache_groups[
@@ -289,6 +299,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
                 - The number of tokens of the longest cache hit.
         """
         # First, find the longest cache hit for full attention.
+        print(f"{self.full_attention_group_ids=}")
         hit_blocks_full_attn = (
             self.full_attention_manager_cls.find_longest_cache_hit(
                 block_hashes=block_hashes,
@@ -298,21 +309,24 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
                 kv_cache_spec=self.full_attention_spec,
                 use_eagle=self.use_eagle,
             ))
-        hit_length = len(
+        hit_length_full = len(
             hit_blocks_full_attn[0]) * self.full_attention_block_size
-
+        print(f"Full KV {hit_length_full=}")
         # Next, find the cache hit for the other attention WITHIN
         # the cache hit of full attention.
+        print(f"{self.other_group_ids=}")
         hit_blocks_other_attn = (
             self.other_attention_cls.find_longest_cache_hit(
                 block_hashes=block_hashes,
-                max_length=hit_length,
+                max_length=max_cache_hit_length,
                 kv_cache_group_ids=self.other_group_ids,
                 block_pool=self.block_pool,
                 kv_cache_spec=self.other_spec,
                 use_eagle=self.use_eagle,
             ))
         hit_length = len(hit_blocks_other_attn[0]) * self.other_block_size
+        print(f"Other KV {hit_length=}")
+        
         assert hit_length % self.full_attention_block_size == 0
 
         # Truncate the full attention cache hit to the length of the
@@ -324,7 +338,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
         # Merge the hit blocks of full attention and other attention.
         hit_blocks = hit_blocks_other_attn
         for group_id, blocks in enumerate(hit_blocks_full_attn):
-            del blocks[hit_length // self.full_attention_block_size:]
+            # del blocks[hit_length // self.full_attention_block_size:]
             # NOTE: there is only one full attention group in most cases. So
             # the time complexity of insert is fine.
             hit_blocks.insert(group_id, blocks)
