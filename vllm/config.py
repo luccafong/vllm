@@ -2657,7 +2657,14 @@ class SpeculativeConfig:
                 "n_predict": n_predict,
                 "architectures": ["DeepSeekMTPModel"]
             })
-
+        if hf_config.architectures[0] == "Glm4MoeForCausalLM":
+            hf_config.model_type = "glm4_moe_mtp"
+            n_predict = getattr(hf_config, "num_nextn_predict_layers", None)
+            hf_config.update({
+                "n_predict": n_predict,
+                "architectures": ["Glm4MoeMTPForCausalLM"]
+            })
+            return hf_config
         if hf_config.architectures[0] == "MiMoForCausalLM":
             hf_config.model_type = "mimo_mtp"
             n_predict = getattr(hf_config, "num_nextn_predict_layers", None)
@@ -2683,11 +2690,10 @@ class SpeculativeConfig:
         if self.model is None and self.num_speculative_tokens is not None:
             # TODO(Shangming): Refactor mtp configuration logic when supporting
             # mtp acceleration for more models besides deepseek_v3
+            print(f"{self.target_model_config.hf_text_config.model_type=}")
             if self.target_model_config and \
-                (self.target_model_config.hf_text_config.model_type \
-                        == "deepseek_v3" or
-                    self.target_model_config.hf_text_config.model_type \
-                        == "mimo"):
+                (self.target_model_config.hf_text_config.model_type in ('deepseek_v3', 'mimo', 'glm4_moe')
+                ):
                 # use the draft model from the same model:
                 self.model = self.target_model_config.model
             elif self.method in ("ngram", "[ngram]"):
@@ -2695,7 +2701,7 @@ class SpeculativeConfig:
             else:
                 raise ValueError("num_speculative_tokens was provided without "
                                  "speculative model.")
-
+        print(f"{self.method=}")
         # Automatically configure the method for ngram when "model" is used
         # instead of "method"
         if self.method is None and (self.model is not None
@@ -2766,6 +2772,7 @@ class SpeculativeConfig:
                 )
 
                 # Automatically detect the method
+                print(f"{self.draft_model_config.hf_config.model_type=}")
                 if self.method in ('eagle', 'eagle3'):
                     pass
                 elif "eagle-" in self.draft_model_config.model.lower() or \
@@ -2780,6 +2787,7 @@ class SpeculativeConfig:
                       == "deepseek_mtp"
                       or self.draft_model_config.hf_config.model_type
                       == "glm4_moe_mtp"):
+                    print(f"using deepseek mtp")
                     self.method = "deepseek_mtp"
                     if self.num_speculative_tokens > 1:
                         logger.warning(
@@ -2788,6 +2796,7 @@ class SpeculativeConfig:
                                 "to support multiple layers."
                             )
                 else:
+                    print("using draft model?")
                     self.method = "draft_model"
 
                 # Replace hf_config for EAGLE draft_model
