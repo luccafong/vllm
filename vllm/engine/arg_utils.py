@@ -426,6 +426,8 @@ class EngineArgs:
     enable_multimodal_encoder_data_parallel: bool = \
         ParallelConfig.enable_multimodal_encoder_data_parallel
 
+    il_config_path: Optional[str] = None
+
     def __post_init__(self):
         # support `EngineArgs(compilation_config={...})`
         # without having to manually construct a
@@ -844,6 +846,8 @@ class EngineArgs:
                                 **vllm_kwargs["compilation_config"])
         vllm_group.add_argument("--additional-config",
                                 **vllm_kwargs["additional_config"])
+        vllm_group.add_argument("--il-config-path",
+                                **vllm_kwargs["il_config_path"])
 
         # Other arguments
         parser.add_argument('--use-v2-block-manager',
@@ -1179,7 +1183,6 @@ class EngineArgs:
             otlp_traces_endpoint=self.otlp_traces_endpoint,
             collect_detailed_traces=self.collect_detailed_traces,
         )
-
         config = VllmConfig(
             model_config=model_config,
             cache_config=cache_config,
@@ -1195,6 +1198,7 @@ class EngineArgs:
             compilation_config=self.compilation_config,
             kv_transfer_config=self.kv_transfer_config,
             kv_events_config=self.kv_events_config,
+            il_config_path=self.il_config_path,
             additional_config=self.additional_config,
         )
 
