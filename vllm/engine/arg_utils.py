@@ -22,6 +22,7 @@ from vllm.config import (BlockSize, CacheConfig, CacheDType, CompilationConfig,
                          ConfigFormat, ConfigType, DecodingConfig,
                          DetailedTraceModules, Device, DeviceConfig,
                          DistributedExecutorBackend, GuidedDecodingBackend,
+<<<<<<< HEAD
                          GuidedDecodingBackendV1, HfOverrides, KVEventsConfig,
                          KVTransferConfig, LoadConfig, LoadFormat, LoRAConfig,
                          ModelConfig, ModelDType, ModelImpl, MultiModalConfig,
@@ -31,6 +32,16 @@ from vllm.config import (BlockSize, CacheConfig, CacheDType, CompilationConfig,
                          TaskOption, TokenizerMode, TokenizerPoolConfig,
                          VllmConfig, get_attr_docs, get_field)
 from vllm.executor.executor_base import ExecutorBase
+=======
+                         GuidedDecodingBackendV1, HfOverrides,
+                         IntermediateLoggingConfig, KVEventsConfig,
+                         KVTransferConfig, LoadConfig, LogprobsMode,
+                         LoRAConfig, ModelConfig, ModelDType, ModelImpl,
+                         MultiModalConfig, ObservabilityConfig, ParallelConfig,
+                         PoolerConfig, PrefixCachingHashAlgo, SchedulerConfig,
+                         SchedulerPolicy, SpeculativeConfig, TaskOption,
+                         TokenizerMode, VllmConfig, get_attr_docs, get_field)
+>>>>>>> d689db012 (provide default intermediate logging)
 from vllm.logger import init_logger
 from vllm.model_executor.layers.quantization import QuantizationMethods
 from vllm.plugins import load_general_plugins
@@ -383,6 +394,7 @@ class EngineArgs:
         str] = ModelConfig.logits_processor_pattern
 
     speculative_config: Optional[Dict[str, Any]] = None
+    
 
     qlora_adapter_name_or_path: Optional[str] = None
     show_hidden_metrics_for_version: Optional[str] = \
@@ -426,7 +438,16 @@ class EngineArgs:
     enable_multimodal_encoder_data_parallel: bool = \
         ParallelConfig.enable_multimodal_encoder_data_parallel
 
+<<<<<<< HEAD
     il_config_path: Optional[str] = None
+=======
+    async_scheduling: bool = SchedulerConfig.async_scheduling
+    # DEPRECATED
+    enable_prompt_adapter: bool = False
+    intermediate_log_config_path: Optional[str] = None
+
+    intermediate_log_config: Optional[dict[str, Any]] = None
+>>>>>>> d689db012 (provide default intermediate logging)
 
     def __post_init__(self):
         # support `EngineArgs(compilation_config={...})`
@@ -764,6 +785,20 @@ class EngineArgs:
             help="The configurations for speculative decoding. Should be a "
             "JSON string.")
 
+        intermediate_log_group = parser.add_argument_group(
+            title="IntermediateLoggingConfig",
+            description=IntermediateLoggingConfig.__doc__,
+        )
+        intermediate_log_group.add_argument(
+            "--intermediate-log-config",
+            type=json.loads,
+            default=None,
+            help="The configurations for intermediate loggings. Should be a "
+            "JSON string.")
+        
+        intermediate_log_group.add_argument("--intermediate-log-config-path", type=str,
+            help="The path to the configurations for intermediate loggings. Should be a string.")
+        
         # Observability arguments
         observability_kwargs = get_kwargs(ObservabilityConfig)
         observability_group = parser.add_argument_group(
@@ -846,8 +881,9 @@ class EngineArgs:
                                 **vllm_kwargs["compilation_config"])
         vllm_group.add_argument("--additional-config",
                                 **vllm_kwargs["additional_config"])
-        vllm_group.add_argument("--il-config-path",
-                                **vllm_kwargs["il_config_path"])
+
+
+
 
         # Other arguments
         parser.add_argument('--use-v2-block-manager',
@@ -939,6 +975,21 @@ class EngineArgs:
             use_tqdm_on_load=self.use_tqdm_on_load,
             pt_load_map_location=self.pt_load_map_location,
         )
+    
+
+    def create_intermediate_log_config(
+        self,
+    ) -> Optional[IntermediateLoggingConfig]:
+        """Initializes and returns an IntermediateLoggingConfig object based on
+        `intermediate_log_config` or `intermediate_log_config_path`.
+        """
+        if self.intermediate_log_config is not None:
+            return IntermediateLoggingConfig.from_dict(
+                self.intermediate_log_config)
+        if self.intermediate_log_config_path is not None:
+            with open(self.intermediate_log_config_path, "r") as f:
+                return IntermediateLoggingConfig.from_dict(json.load(f))
+        return None
 
     def create_speculative_config(
         self,
@@ -1099,6 +1150,9 @@ class EngineArgs:
             disable_log_stats=self.disable_log_stats,
         )
 
+        intermediate_log_config = self.create_intermediate_log_config(
+        )
+
         # Reminder: Please update docs/features/compatibility_matrix.md
         # If the feature combo become valid
         if self.num_scheduler_steps > 1:
@@ -1198,7 +1252,7 @@ class EngineArgs:
             compilation_config=self.compilation_config,
             kv_transfer_config=self.kv_transfer_config,
             kv_events_config=self.kv_events_config,
-            il_config_path=self.il_config_path,
+            intermediate_log_config=intermediate_log_config,
             additional_config=self.additional_config,
         )
 
