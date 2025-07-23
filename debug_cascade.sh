@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=4 python3 /data/users/fanglu/gitrepos/vllm/examples/offline_inference/llm_engine_example.py --model $HOME/local/llama3 --tensor-parallel-size 1 --max-model-len 32768 --max_num_seqs 16 --enforce-eager
