@@ -438,12 +438,6 @@ class EngineArgs:
     enable_multimodal_encoder_data_parallel: bool = \
         ParallelConfig.enable_multimodal_encoder_data_parallel
 
-<<<<<<< HEAD
-    il_config_path: Optional[str] = None
-=======
-    async_scheduling: bool = SchedulerConfig.async_scheduling
-    # DEPRECATED
-    enable_prompt_adapter: bool = False
     intermediate_log_config_path: Optional[str] = None
 
     intermediate_log_config: Optional[dict[str, Any]] = None
