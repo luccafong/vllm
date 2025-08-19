@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import os
 from typing import Optional, Union
 
 import torch
-from torch.distributed import ProcessGroup
 
 import vllm.envs as envs
+from torch.distributed import ProcessGroup
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 
@@ -32,8 +33,8 @@ class CudaCommunicator(DeviceCommunicatorBase):
             use_custom_allreduce = _ENABLE_CUSTOM_ALL_REDUCE
 
         # ep does not use pynccl
-        use_pynccl = "ep" not in unique_name
-
+        use_pynccl = "ep" not in unique_name and os.environ.get("VLLM_DISABLE_PYNCCL", "0") == "0"
+        self.force_use_torch_allreduce = os.environ.get("VLLM_FORCE_TORCH_ALLREDUCE", "0") == "1"
         self.use_pynccl = use_pynccl
         self.use_custom_allreduce = use_custom_allreduce
 
@@ -121,6 +122,10 @@ class CudaCommunicator(DeviceCommunicatorBase):
             assert out is not None
             return out
         pynccl_comm = self.pynccl_comm
+        if pynccl_comm is None or self.force_use_torch_allreduce:
+            out = input_.clone()
+            torch.distributed.all_reduce(out, group=self.device_group)
+            return out
         assert pynccl_comm is not None
         out = pynccl_comm.all_reduce(input_)
         if out is None:

@@ -62,6 +62,16 @@ class EPLBConfig:
 class ParallelConfig:
     """Configuration for the distributed execution."""
 
+    # TODO: reuse this for DP and PP, now will use for TP cross nodes only
+    distributed_master_ip: str = "127.0.0.1"
+    """distributed master ip """
+
+    distributed_master_port: int = 0
+    """distributed master port """
+    distributed_node_rank: int = 0
+    """distributed node rank """
+    distributed_node_size: int = 1
+    """distributed node size """
     pipeline_parallel_size: int = 1
     """Number of pipeline parallel groups."""
     tensor_parallel_size: int = 1
@@ -378,7 +388,8 @@ class ParallelConfig:
             elif current_platform.is_tpu() and envs.VLLM_XLA_USE_SPMD:
                 backend = "uni"
             elif (current_platform.is_cuda()
-                  and cuda_device_count_stateless() < self.world_size):
+                  and cuda_device_count_stateless() < self.world_size
+                  and self.distributed_node_size == 1):
                 if not ray_found:
                     raise ValueError("Unable to load Ray: "
                                      f"{ray_utils.ray_import_err}. Ray is "

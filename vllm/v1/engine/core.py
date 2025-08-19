@@ -82,8 +82,17 @@ class EngineCore:
             self.model_executor.register_failure_callback(
                 executor_fail_callback)
 
+        self.scheduler = None
         self.available_gpu_memory_for_kv_cache = -1
+        # No scheduler needed for non DP distributed inference with rank
+        self.batch_queue_size  = 0
+        self.batch_queue: Optional[queue.Queue[tuple[Future[ModelRunnerOutput],
+                                                     SchedulerOutput]]] = None
 
+        self.request_block_hasher: Optional[Callable[[Request],
+                                                     list[BlockHash]]] = None
+        if self.vllm_config.parallel_config.distributed_node_rank > 0:
+            return
         # Setup KV Caches and update CacheConfig after profiling.
         num_gpu_blocks, num_cpu_blocks, kv_cache_config = \
             self._initialize_kv_caches(vllm_config)
@@ -354,7 +363,8 @@ class EngineCore:
         return engine_core_outputs, scheduled_batch
 
     def shutdown(self):
-        self.structured_output_manager.clear_backend()
+        if self.structured_output_manager:
+            self.structured_output_manager.clear_backend()
         if self.model_executor:
             self.model_executor.shutdown()
         if self.scheduler:
@@ -366,11 +376,12 @@ class EngineCore:
     def reset_mm_cache(self):
         # NOTE: Since this is mainly for debugging, we don't attempt to
         # re-sync the internal caches (P0 processor, P0 mirror, P1 mirror)
-        if self.scheduler.has_unfinished_requests():
-            logger.warning("Resetting the multi-modal cache when requests are "
-                           "in progress may lead to desynced internal caches.")
+        if self.scheduler is not None:
+            if self.scheduler.has_unfinished_requests():
+                logger.warning("Resetting the multi-modal cache when requests are "
+                            "in progress may lead to desynced internal caches.")
 
-        self.mm_input_cache_server.reset()
+            self.mm_input_cache_server.reset()
 
     def reset_prefix_cache(self):
         self.scheduler.reset_prefix_cache()
@@ -720,12 +731,18 @@ class EngineCoreProc(EngineCore):
     def run_busy_loop(self):
         """Core busy loop of the EngineCore."""
 
-        # Loop until process is sent a SIGINT or SIGTERM
-        while True:
-            # 1) Poll the input queue until there is work to do.
-            self._process_input_queue()
-            # 2) Step the engine core and return the outputs.
-            self._process_engine_step()
+        if self.scheduler is not None:
+            # Loop until process is sent a SIGINT or SIGTERM
+            while True:
+                # 1) Poll the input queue until there is work to do.
+                self._process_input_queue()
+                # 2) Step the engine core and return the outputs.
+                self._process_engine_step()
+        else:
+            # Loop until process is sent a SIGINT or SIGTERM
+            while True:
+                # No real scheduler for follower nodes
+                time.sleep(1)
 
     def _process_input_queue(self):
         """Exits when an engine step needs to be performed."""

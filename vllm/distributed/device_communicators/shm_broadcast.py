@@ -334,6 +334,7 @@ class MessageQueue:
             logger.debug("Connecting to %s", socket_addr)
             self.remote_socket.connect(socket_addr)
 
+        logger.info("Reader: vLLM message queue communication handle: %s", self.handle)
         return self
 
     def wait_until_ready(self):
@@ -535,11 +536,45 @@ class MessageQueue:
             return self.dequeue()
 
     @staticmethod
+    def create_from_process_group_single_reader(pg: ProcessGroup,
+                                max_chunk_bytes,
+                                max_chunks,
+                                reader_rank: int = 0, blocking: bool = False) -> tuple["MessageQueue", list[Handle]]:
+        """Create a message queue from ranks.
+        """
+        # We assume same size acrsso groups
+        local_size = torch.cuda.device_count()
+        group_rank = dist.get_rank(pg)
+        same_node = group_rank // local_size == reader_rank // local_size
+        logger.info(f"debug 1: create a message queue with n_local_reader={same_node} based on {group_rank=}, {local_size=}, {same_node=}, {blocking=}")
+        buffer_io = MessageQueue(
+            n_reader=1,
+            # if same_node else 2, # 1 local reader for local executor process, 1 remote reader if not on same node
+            n_local_reader=1 if same_node else 0,
+            max_chunk_bytes=max_chunk_bytes,
+            max_chunks=max_chunks,
+        )
+        handle = buffer_io.export_handle()
+        handles = [None] * dist.get_world_size(pg) if group_rank == reader_rank else None
+        logger.info(f"debug 1: gather {handle=} objects in total {len(handles) if handles else 'unknown'} handles to dst rank {reader_rank=}")
+        dist.gather_object(handle, handles, dst=reader_rank, group=pg)
+        logger.info(f"debug 1: gathered {handles=}")
+        # if reader
+        # TODO: create  message queue handle from the ranks
+        # return handle for each rank
+
+        if blocking:
+            buffer_io.wait_until_ready()
+        return (buffer_io, handles if handles is not None else [])
+    @staticmethod
     def create_from_process_group(pg: Union[ProcessGroup,
                                             StatelessProcessGroup],
                                   max_chunk_bytes,
                                   max_chunks,
-                                  writer_rank=0) -> "MessageQueue":
+                                  writer_rank: int = 0,
+                                  extra_writer_handler=None,
+                                  blocking: bool = True,
+                                  ) -> "MessageQueue":
         if isinstance(pg, ProcessGroup):
             group_rank = dist.get_rank(pg)
             group_world_size = dist.get_world_size(pg)
@@ -548,22 +583,24 @@ class MessageQueue:
             group_rank = pg.rank
             group_world_size = pg.world_size
             global_ranks = list(range(pg.world_size))
-
         from vllm.distributed.parallel_state import in_the_same_node_as
         status = in_the_same_node_as(pg, source_rank=writer_rank)
         same_node_ranks = [i for i, s in enumerate(status) if s]
-        n_reader = group_world_size - 1
-        n_local_reader = len(same_node_ranks) - 1
+        n_reader = group_world_size if extra_writer_handler is not None else group_world_size - 1
+        n_local_reader = same_node_ranks if extra_writer_handler is not None else len(same_node_ranks) - 1
         local_reader_ranks = [i for i in same_node_ranks if i != writer_rank]
         buffer_io: MessageQueue
         if group_rank == writer_rank:
-            buffer_io = MessageQueue(
-                n_reader=n_reader,
-                n_local_reader=n_local_reader,
-                local_reader_ranks=local_reader_ranks,
-                max_chunk_bytes=max_chunk_bytes,
-                max_chunks=max_chunks,
-            )
+            if extra_writer_handler is not None:
+                buffer_io = MessageQueue.create_from_handle(extra_writer_handler, group_rank)
+            else:
+                buffer_io = MessageQueue(
+                    n_reader=n_reader,
+                    n_local_reader=n_local_reader,
+                    local_reader_ranks=local_reader_ranks,
+                    max_chunk_bytes=max_chunk_bytes,
+                    max_chunks=max_chunks,
+                )
             handle = buffer_io.export_handle()
             if isinstance(pg, ProcessGroup):
                 dist.broadcast_object_list([handle],
@@ -581,5 +618,6 @@ class MessageQueue:
             else:
                 handle = pg.broadcast_obj(None, writer_rank)
             buffer_io = MessageQueue.create_from_handle(handle, group_rank)
-        buffer_io.wait_until_ready()
+        if blocking:
+            buffer_io.wait_until_ready()
         return buffer_io

@@ -34,6 +34,7 @@ def _can_p2p(rank: int, world_size: int) -> bool:
         if envs.VLLM_SKIP_P2P_CHECK:
             logger.info(
                 "Skipping P2P check and trusting the driver's P2P report.")
+            logger.info(f"Check device access from {rank} to {i}")
             return torch.cuda.can_device_access_peer(rank, i)
         if not gpu_p2p_access_check(rank, i):
             return False
@@ -139,6 +140,7 @@ class CustomAllreduce:
         assert current_platform.is_cuda_alike()
         fully_connected = current_platform.is_fully_connected(
             physical_device_ids)
+        logger.info(f"Fully connected: %s, world_size: {world_size}", fully_connected)
         if world_size > 2 and not fully_connected:
             logger.warning(
                 "Custom allreduce is disabled because it's not supported on"

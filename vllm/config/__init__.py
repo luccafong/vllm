@@ -1356,11 +1356,13 @@ class ModelConfig:
 
         pipeline_parallel_size = parallel_config.pipeline_parallel_size
         if pipeline_parallel_size > 1:
-            if not self.registry.is_pp_supported_model(self.architectures,
-                                                       self):
-                raise NotImplementedError(
-                    "Pipeline parallelism is not supported for this model. "
-                    "Supported models implement the `SupportsPP` interface.")
+
+            # FIXME(lucia)
+            # if not self.registry.is_pp_supported_model(self.architectures,
+            #                                            self):
+            #     raise NotImplementedError(
+            #         "Pipeline parallelism is not supported for this model. "
+            #         "Supported models implement the `SupportsPP` interface.")
 
             if self.use_async_output_proc:
                 self.use_async_output_proc = False
@@ -4051,6 +4053,7 @@ def get_layers_from_vllm_config(
     if layer_names is None:
         layer_names = list(
             vllm_config.compilation_config.static_forward_context.keys())
+        print(f"{layer_names=}")
 
     forward_context = vllm_config.compilation_config.static_forward_context
 
