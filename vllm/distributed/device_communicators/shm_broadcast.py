@@ -334,7 +334,6 @@ class MessageQueue:
             logger.debug("Connecting to %s", socket_addr)
             self.remote_socket.connect(socket_addr)
 
-        logger.info("Reader: vLLM message queue communication handle: %s", self.handle)
         return self
 
     def wait_until_ready(self):

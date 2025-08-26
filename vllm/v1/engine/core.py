@@ -82,7 +82,7 @@ class EngineCore:
             self.model_executor.register_failure_callback(
                 executor_fail_callback)
 
-        self.scheduler = None
+        self.scheduler: Optional[SchedulerInterface] = None
         self.available_gpu_memory_for_kv_cache = -1
         # No scheduler needed for non DP distributed inference with rank
         self.batch_queue_size  = 0
@@ -127,7 +127,7 @@ class EngineCore:
             logger.info("Disabling chunked prefill for model without KVCache")
             vllm_config.scheduler_config.chunked_prefill_enabled = False
 
-        self.scheduler: SchedulerInterface = Scheduler(
+        self.scheduler = Scheduler(
             vllm_config=vllm_config,
             kv_cache_config=kv_cache_config,
             structured_output_manager=self.structured_output_manager,

@@ -986,10 +986,6 @@ def init_distributed_environment(
     local_rank: int = -1,
     backend: str = "nccl",
 ):
-    logger.info(
-        "world_size=%d rank=%d local_rank=%d "
-        "distributed_init_method=%s backend=%s", world_size, rank, local_rank,
-        distributed_init_method, backend)
     from vllm.config import get_current_vllm_config
     config = get_current_vllm_config()
     if config is not None and config.parallel_config.data_parallel_size > 1:
@@ -1013,7 +1009,10 @@ def init_distributed_environment(
         port = config.parallel_config.distributed_master_port
         distributed_init_method = get_distributed_init_method(ip, port)
     if not torch.distributed.is_initialized():
-        logger.info(f"init with {rank=}, {distributed_init_method=}, {world_size=}")
+        logger.info(
+            "world_size=%d rank=%d local_rank=%d "
+            "distributed_init_method=%s backend=%s", world_size, rank, local_rank,
+            distributed_init_method, backend)
         assert distributed_init_method is not None, (
             "distributed_init_method must be provided when initializing "
             "distributed environment")

@@ -29,7 +29,7 @@ else:
 
 logger = init_logger(__name__)
 
-DistributedExecutorBackend = Literal["ray", "mp", "uni", "external_launcher"]
+DistributedExecutorBackend = Literal["ray", "mp", "mp_distributed", "uni", "external_launcher"]
 
 
 @config
@@ -62,10 +62,8 @@ class EPLBConfig:
 class ParallelConfig:
     """Configuration for the distributed execution."""
 
-    # TODO: reuse this for DP and PP, now will use for TP cross nodes only
     distributed_master_ip: str = "127.0.0.1"
-    """distributed master ip """
-
+    """distributed master ip for multi-node distributed inference."""
     distributed_master_port: int = 0
     """distributed master port """
     distributed_node_rank: int = 0
@@ -387,6 +385,8 @@ class ParallelConfig:
                 backend = "uni"
             elif current_platform.is_tpu() and envs.VLLM_XLA_USE_SPMD:
                 backend = "uni"
+            elif current_platform.is_cuda() and self.distributed_node_size > 1:
+                backend = "mp_distributed"
             elif (current_platform.is_cuda()
                   and cuda_device_count_stateless() < self.world_size
                   and self.distributed_node_size == 1):
