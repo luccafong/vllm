@@ -19,6 +19,7 @@ from typing import Any, Callable, cast, Optional, Union, List
 
 import cloudpickle
 
+from dataclasses import field
 import vllm.envs as envs
 from vllm.config import VllmConfig
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
@@ -117,14 +118,19 @@ class MultiprocExecutor(Executor):
             # Workers must be created before wait_for_ready to avoid
             # deadlock, since worker.init_device() does a device sync.
             self.init_workers(unready_workers)
-            self.init_response_mqs()
+            # self.init_response_mqs()
             # Ensure message queues are ready. Will deadlock if re-ordered
             # Must be kept consistent with the WorkerProc.
             if self.rpc_broadcast_mq is not None:
                 self.rpc_broadcast_mq.wait_until_ready()
-            for response_mq in self.response_mqs:
-                response_mq.wait_until_ready()
-
+            for w in self.workers:
+                # local workers
+                if w.worker_response_mq is not None:
+                    w.worker_response_mq.wait_until_ready()
+            # remote mqs
+            for rpc_response_mq in self.workers[0].rpc_response_mqs:
+                if rpc_response_mq is not None:
+                    rpc_response_mq.wait_until_ready()
             self.start_worker_monitor()
             success = True
         finally:
@@ -373,6 +379,7 @@ class WorkerProcHandle:
     rank: int
     worker_response_mq: Optional[MessageQueue] = None  # The worker process writes to this MQ
     death_writer: Optional[Connection] = None
+    rpc_response_mqs: List[MessageQueue] = field(default_factory=list)
 
     @classmethod
     def from_unready_handle(
@@ -382,6 +389,7 @@ class WorkerProcHandle:
             proc=unready_handle.proc,
             rank=unready_handle.rank,
             worker_response_mq=worker_response_mq,
+            rpc_response_mqs=kwargs.get("rpc_response_mqs", []),
             death_writer=unready_handle.death_writer,
         )
 
@@ -473,7 +481,6 @@ class WorkerProc:
                                daemon=True)
 
         proc.start()
-        print("writer closed")
         writer.close()
         # Keep death_writer open in parent - when parent exits,
         # death_reader in child will get EOFError
@@ -507,10 +514,19 @@ class WorkerProc:
                     response: dict[str, Any] = pipe.recv()
                     if response["status"] != "READY":
                         raise e
+
+                    worker_response_mq = None
+                    # Extract the message queue handle.
+                    if len(response["handle"].local_reader_ranks) > 0:
+                        worker_response_mq = MessageQueue.create_from_handle(
+                            response["handle"], 0)
+                    # ensure this is remote handle
+                    remote_response_mqs = [MessageQueue.create_from_handle(
+                        response, -1) if response.remote_subscribe_addr is not None else None for response in response["rpc_response_handles"]]
                     idx = unready_proc_handle.rank % len(ready_proc_handles)
-                    ready_proc_handles[idx] = cls.wait_for_response_handle_ready(
-                        response, unready_proc_handle
-                    )
+                    ready_proc_handles[idx] = (
+                        WorkerProcHandle.from_unready_handle(
+                            unready_proc_handle, worker_response_mq, remote_response_mqs=remote_response_mqs))
                 except EOFError:
                     e.__suppress_context__ = True
                     raise e from None
@@ -583,6 +599,7 @@ class WorkerProc:
 
         try:
             print("reader closed")
+            reader.close()
             worker = cls(*args, **kwargs)
 
             # Send READY once we know everything is loaded
@@ -597,7 +614,6 @@ class WorkerProc:
             worker.worker_response_mq.wait_until_ready()
             print("ready writer closed")
             ready_writer.close()
-            reader.close()
             ready_writer = None
 
             worker.worker_busy_loop()
