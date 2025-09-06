@@ -41,18 +41,19 @@ async def main():
         top_p=0.9,
         max_tokens=100,
     )
-
-    prompt = "Who won the 2004 World Series?"
-    final_output: Optional[RequestOutput] = None
-    async for output in engine_client.generate(
-        prompt=prompt,
-        sampling_params=sampling_params,
-        request_id="abcdef",
-        data_parallel_rank=1,
-    ):
-        final_output = output
-    if final_output:
-        print(final_output.outputs[0].text)
+    num_prompts = 10
+    for i in range(num_prompts):
+        prompt = "Who won the 2004 World Series?"
+        final_output: Optional[RequestOutput] = None
+        async for output in engine_client.generate(
+            prompt=prompt,
+            sampling_params=sampling_params,
+            request_id=f"abcdef-{i}",
+            data_parallel_rank=1,
+        ):
+            final_output = output
+        if final_output:
+            print(final_output.outputs[0].text)
 
 
 if __name__ == "__main__":
