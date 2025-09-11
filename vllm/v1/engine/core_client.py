@@ -231,6 +231,7 @@ class EngineCoreClient(ABC):
         raise NotImplementedError
 
 
+
 class InprocClient(EngineCoreClient):
     """
     InprocClient: client for in-process EngineCore. Intended 
@@ -246,6 +247,7 @@ class InprocClient(EngineCoreClient):
 
     def get_output(self) -> EngineCoreOutputs:
         outputs, _ = self.engine_core.step()
+        print(f"{outputs=}")
         return outputs.get(0) or EngineCoreOutputs()
 
     def get_supported_tasks(self) -> tuple[SupportedTask, ...]:
@@ -310,8 +312,7 @@ class InprocClient(EngineCoreClient):
 
     def dp_engines_running(self) -> bool:
         return False
-
-
+        
 @dataclass
 class BackgroundResources:
     """Used as a finalizer for clean shutdown, avoiding

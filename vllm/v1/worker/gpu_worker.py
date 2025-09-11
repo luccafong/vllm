@@ -17,7 +17,8 @@ from vllm.distributed import (ensure_model_parallel_initialized,
                               init_distributed_environment,
                               set_custom_all_reduce)
 from vllm.distributed.kv_transfer import ensure_kv_transfer_initialized
-from vllm.distributed.parallel_state import get_pp_group, get_tp_group
+from vllm.distributed.parallel_state import (get_nondp_group, get_pp_group,
+                                             get_tp_group)
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.model_executor import set_random_seed
@@ -50,13 +51,17 @@ class Worker(WorkerBase):
         rank: int,
         distributed_init_method: str,
         is_driver_worker: bool = False,
+        uniq_schedule_spmd_mode: bool = False,
     ):
 
-        super().__init__(vllm_config=vllm_config,
-                         local_rank=local_rank,
-                         rank=rank,
-                         distributed_init_method=distributed_init_method,
-                         is_driver_worker=is_driver_worker)
+        super().__init__(
+            vllm_config=vllm_config,
+            local_rank=local_rank,
+            rank=rank,
+            distributed_init_method=distributed_init_method,
+            is_driver_worker=is_driver_worker,
+            uniq_schedule_spmd_mode=uniq_schedule_spmd_mode,
+        )
 
         if self.model_config.trust_remote_code:
             # note: lazy import to avoid importing torch before initializing
@@ -356,6 +361,10 @@ class Worker(WorkerBase):
         self,
         scheduler_output: "SchedulerOutput",
     ) -> Optional[Union[ModelRunnerOutput, AsyncModelRunnerOutput]]:
+        if self.uniq_schedule_spmd_mode:
+            logger.info("Executing model in uniq schedule, SPMD execution mode.")
+            get_nondp_group().broadcast_object(scheduler_output, src=0)
+
         intermediate_tensors = None
         forward_pass = scheduler_output.total_num_scheduled_tokens > 0
         if forward_pass and not get_pp_group().is_first_rank:
@@ -612,7 +621,7 @@ def init_worker_distributed_environment(
     """Initialize the distributed environment."""
     parallel_config = vllm_config.parallel_config
     set_custom_all_reduce(not parallel_config.disable_custom_all_reduce)
-
+    logger.info(f"{parallel_config.world_size=}")
     init_distributed_environment(parallel_config.world_size, rank,
                                  distributed_init_method, local_rank, backend)
 

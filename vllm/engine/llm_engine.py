@@ -446,6 +446,7 @@ class LLMEngine:
         elif distributed_executor_backend == "uni":
             # JAX-style, single-process, multi-device executor.
             from vllm.executor.uniproc_executor import UniProcExecutor
+            logger.info("Using uni-proc executor")
             executor_class = UniProcExecutor
         elif distributed_executor_backend == "external_launcher":
             # executor with external launcher
@@ -505,6 +506,7 @@ class LLMEngine:
         # Shutdown model executor when engine is garbage collected
         # Use getattr since __init__ can fail before the field is set
         if model_executor := getattr(self, "model_executor", None):
+            logger.info("Shutting down model executor")
             model_executor.shutdown()
 
     def get_tokenizer_group(self) -> TokenizerGroup:
@@ -611,6 +613,8 @@ class LLMEngine:
         tokenization_kwargs: Optional[dict[str, Any]] = None,
         trace_headers: Optional[Mapping[str, str]] = None,
         priority: int = 0,
+        idx_in_batch: int = -1,
+        batch_size: int = 1,
     ) -> None:
         """Add a request to the engine's request pool.
 
@@ -829,6 +833,7 @@ class LLMEngine:
         request_id: If provided, then only this request is going to be processed
         """
 
+        logger.info("Processing model outputs")
         now = time.time()
 
         if len(ctx.output_queue) == 0:

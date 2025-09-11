@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from logging import log
 import os
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -8,6 +9,7 @@ import torch
 import torch.distributed as dist
 
 import vllm.envs as envs
+from vllm.distributed.parallel_state import get_dp_group, get_pp_group, get_tp_group
 from vllm.executor.executor_base import ExecutorBase
 from vllm.logger import init_logger
 from vllm.utils import (get_distributed_init_method, get_ip, get_open_port,
@@ -35,8 +37,10 @@ class UniProcExecutor(ExecutorBase):
             ":")
         if len(device_info) > 1:
             local_rank = int(device_info[1])
+            logger.info(f"Using local rank {local_rank}")
         rank = 0
         is_driver_worker = True
+
         kwargs = dict(
             vllm_config=self.vllm_config,
             local_rank=local_rank,
@@ -44,6 +48,7 @@ class UniProcExecutor(ExecutorBase):
             distributed_init_method=distributed_init_method,
             is_driver_worker=is_driver_worker,
         )
+        logger.info(f"Initializing worker with kwargs: {kwargs}")
         self.collective_rpc("init_worker", args=([kwargs], ))
         self.collective_rpc("init_device")
         self.collective_rpc("load_model")
@@ -123,10 +128,16 @@ class ExecutorWithExternalLauncher(UniProcExecutor):
             rank=rank,
             distributed_init_method=distributed_init_method,
             is_driver_worker=is_driver_worker,
+            uniq_schedule_spmd_mode=True,
         )
+
         self.collective_rpc("init_worker", args=([kwargs], ))
         self.collective_rpc("init_device")
         self.collective_rpc("load_model")
+
+        self.tp_rank = get_tp_group().rank_in_group
+        self.pp_rank = get_pp_group().rank_in_group
+        self.dp_group = get_dp_group() 
 
     def determine_num_available_blocks(self) -> Tuple[int, int]:
         """

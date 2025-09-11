@@ -3,8 +3,9 @@
 
 from collections.abc import Mapping
 from copy import copy
-from typing import Any, Callable, Optional, Union
-
+import re
+from typing import Any, Callable, Optional, Union, final
+import os
 from typing_extensions import TypeVar
 
 import vllm.envs as envs
@@ -23,7 +24,7 @@ from vllm.transformers_utils.tokenizer_group import (
     TokenizerGroup, init_tokenizer_from_configs)
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import Device
-from vllm.v1.engine.core_client import EngineCoreClient
+from vllm.v1.engine.core_client import EngineCoreClient, InprocClient
 from vllm.v1.engine.output_processor import OutputProcessor
 from vllm.v1.engine.parallel_sampling import ParentRequest
 from vllm.v1.engine.processor import Processor
@@ -37,6 +38,9 @@ logger = init_logger(__name__)
 
 _R = TypeVar("_R", default=Any)
 
+
+import torch
+import math
 
 class LLMEngine:
     """Legacy LLMEngine for backwards compatibility."""
@@ -76,8 +80,11 @@ class LLMEngine:
         # important: init dp group before init the engine_core
         # In the decoupled engine case this is handled in EngineCoreProc.
         parallel_config = vllm_config.parallel_config
-        if not multiprocess_mode and parallel_config.data_parallel_size > 1:
-            self.dp_group = parallel_config.stateless_init_dp_group()
+        # TODO: only for external launcher
+        if not multiprocess_mode and parallel_config.data_parallel_size > 1 \
+            and self.vllm_config.parallel_config.distributed_executor_backend != "external_launcher":
+                self.dp_group = parallel_config.stateless_init_dp_group(backend="gloo")
+                
         else:
             self.dp_group = None
         self.should_execute_dummy_batch = False
@@ -108,6 +115,20 @@ class LLMEngine:
             executor_class=executor_class,
             log_stats=self.log_stats,
         )
+        self.spmd_dp = False
+        if self.vllm_config.parallel_config.distributed_executor_backend == "external_launcher":
+            assert isinstance(self.engine_core, InprocClient)
+            inproc_dp_group = self.engine_core.engine_core.inproc_dp_group
+            assert inproc_dp_group is not None
+            print(f"{inproc_dp_group=}")
+            self.dp_group = inproc_dp_group.cpu_group
+            self.dp_group_size = inproc_dp_group.world_size
+            self.spmd_dp = True
+            self.dp_rank = inproc_dp_group.rank_in_group
+        else:
+            self.dp_group_size = 1
+            self.dp_rank = 0
+        
 
         if not multiprocess_mode:
             # for v0 compatibility
@@ -162,15 +183,19 @@ class LLMEngine:
 
     def has_unfinished_requests(self) -> bool:
         has_unfinished = self.output_processor.has_unfinished_requests()
+        if has_unfinished:
+            print(f"{self.output_processor.request_states=}")
         if self.dp_group is None:
             return has_unfinished or self.engine_core.dp_engines_running()
         return self.has_unfinished_requests_dp(has_unfinished)
 
     def has_unfinished_requests_dp(self, has_unfinished: bool) -> bool:
+        print(f"{self.dp_group=}")
         aggregated_has_unfinished = ParallelConfig.has_unfinished_dp(
             self.dp_group, has_unfinished)
         if not has_unfinished and aggregated_has_unfinished:
             self.should_execute_dummy_batch = True
+        print(f"{aggregated_has_unfinished=}")
         return aggregated_has_unfinished
 
     @classmethod
@@ -186,6 +211,23 @@ class LLMEngine:
         request_ids = self.output_processor.abort_requests(request_ids)
         self.engine_core.abort_requests(request_ids)
 
+
+    # def spmd_shard_dp_req(self) -> None:
+    #     import torch
+    #     if self.engine_core.engine_core.scheduler is not None:
+    #         scheduler = self.engine_core.engine_core.scheduler
+    #         running = scheduler.runnings + scheduler.waiting
+    #         torch.distributed.all_reduce(running, op=torch.distributed.ReduceOp.MIN)
+            
+    def allocate(self, req_batch_idx: int) -> tuple[bool, int]:
+        # given indice, and len, check if the indice is in the current rank
+        # for DP=8, request len be 19, we evenly distribute
+        dp_rank = req_batch_idx % self.dp_group_size
+        # given [0,1,2,3...18]
+        # we get [0,8,16] [1,9,17] [2,10,18] [3,11,19], [4,12] [5,13] [6,14] [7,15]
+        return dp_rank == self.dp_rank, dp_rank
+
+
     def add_request(
         self,
         request_id: str,
@@ -195,13 +237,14 @@ class LLMEngine:
         lora_request: Optional[LoRARequest] = None,
         tokenization_kwargs: Optional[dict[str, Any]] = None,
         trace_headers: Optional[Mapping[str, str]] = None,
-        priority: int = 0,
+        priority: int = 0
     ) -> None:
         # Validate the request_id type.
         if not isinstance(request_id, str):
             raise TypeError(
                 f"request_id must be a string, got {type(request_id)}")
-
+            
+        logger.debug(f"Adding request {request_id} to the engine of rank {self.dp_rank}.")
         # Process raw inputs into the request.
         prompt_str, request = self.processor.process_inputs(
             request_id, prompt, params, arrival_time, lora_request,
@@ -255,9 +298,30 @@ class LLMEngine:
             assert outputs.scheduler_stats is not None
             self.stat_logger.record(scheduler_stats=outputs.scheduler_stats,
                                     iteration_stats=iteration_stats)
-
         return processed_outputs.request_outputs
 
+
+    def dp_all_gather(self, outputs: Union[list[RequestOutput], list[PoolingRequestOutput]], request_ids: list[str]) -> Union[list[RequestOutput], list[PoolingRequestOutput]]:
+        # logger.info("Running all gather")
+        local_result = outputs
+        global_results: list[Optional[list[RequestOutput]]] = [None] * self.dp_group_size
+        # logger.info(f"{local_result=}")
+        if self.dp_group is not None and self.dp_group_size > 0:
+            torch.distributed.all_gather_object(global_results, local_result, group=self.dp_group)
+            final_output = []
+            logger.info(f"{global_results=}")
+            logger.info(f"{request_ids=}")
+            req_output_dict ={}
+            for rank_result in global_results:
+                if rank_result is not None:
+                    for req_output in rank_result:
+                        req_output_dict[req_output.request_id] = req_output
+            for req_id in request_ids:
+                if req_id in req_output_dict:
+                    final_output.append(req_output_dict[req_id])
+            logger.info(f"{final_output=}")
+            return final_output
+        return outputs
     def get_vllm_config(self):
         return self.vllm_config
 
@@ -321,5 +385,5 @@ class LLMEngine:
         return self.engine_core.collective_rpc(method, timeout, args, kwargs)
 
     def __del__(self):
-        if dp_group := getattr(self, "dp_group", None):
+        if dp_group := getattr(self, "dp_group", None) and self.vllm_config.parallel_config.distributed_executor_backend != "external_launcher":
             stateless_destroy_torch_distributed_process_group(dp_group)
