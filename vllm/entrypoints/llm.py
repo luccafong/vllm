@@ -3,6 +3,7 @@
 
 import itertools
 from collections.abc import Sequence
+import logging
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 import cloudpickle
@@ -54,6 +55,7 @@ from vllm.transformers_utils.tokenizer import (AnyTokenizer, MistralTokenizer,
                                                get_cached_tokenizer)
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import Counter, Device, as_iter, is_list_of
+from vllm.v1 import request
 from vllm.v1.sample.logits_processor import LogitsProcessor
 
 if TYPE_CHECKING:
@@ -375,17 +377,24 @@ class LLM:
         lora_request = self._get_modality_specific_lora_reqs(
             prompts, lora_request)
 
-        self._validate_and_add_requests(
+        logging.info("Generating %d prompts", len(prompts))
+
+        allocated_ranks = self._validate_and_add_requests(
             prompts=prompts,
             params=sampling_params,
             use_tqdm=use_tqdm,
             lora_request=lora_request,
             priority=priority,
         )
-
+        
+        logging.info("Running requests through step engine")
         outputs = self._run_engine(use_tqdm=use_tqdm)
+        outputs = self.llm_engine.dp_all_gather(outputs, allocated_ranks)
+        logging.info("Finished running requests through step engine getting %d outputs")
         return self.engine_class.validate_outputs(outputs, RequestOutput)
 
+    def _dp_allocate(self, req_batch_idx: int) -> tuple[bool, int]:
+        return self.llm_engine.vllm_config.parallel_config.dp_simple_allocate(req_batch_idx)
     def _get_modality_specific_lora_reqs(
             self, prompts: Union[PromptType, Sequence[PromptType]],
             lora_request: Optional[Union[list[LoRARequest], LoRARequest]]):
@@ -1411,7 +1420,7 @@ class LLM:
         use_tqdm: Union[bool, Callable[..., tqdm]] = True,
         lora_request: Optional[Union[Sequence[LoRARequest], LoRARequest]],
         priority: Optional[list[int]] = None,
-    ) -> None:
+    ) -> dict[str, int]:
         if isinstance(prompts, (str, dict)):
             # Convert a single prompt to a list.
             prompts = [prompts]
@@ -1437,7 +1446,9 @@ class LLM:
             it = tqdm_func(it, desc="Adding requests")
 
         model_config = self.llm_engine.model_config
-
+        # if self.llm_engine.vllm_config.parallel_config.distributed_executor_backend == "external_launcher":
+            # use distributed sampler for DP
+        allocated_ranks ={}    
         for i, prompt in enumerate(it):
 
             param = params[i] if isinstance(params, Sequence) else params
@@ -1446,7 +1457,7 @@ class LLM:
             _validate_truncation_size(model_config.max_model_len,
                                       param.truncate_prompt_tokens,
                                       tokenization_kwargs)
-
+            logging.debug(f"Adding request {i}: {prompt}")
             self._add_request(
                 prompt,
                 params[i] if isinstance(params, Sequence) else params,
@@ -1454,7 +1465,11 @@ class LLM:
                 lora_request=lora_request[i] if isinstance(
                     lora_request, Sequence) else lora_request,
                 priority=priority[i] if priority else 0,
+                batch_size = num_requests,
+                allocated_ranks=allocated_ranks,
             )
+        return allocated_ranks
+
 
     def _add_request(
         self,
@@ -1463,16 +1478,24 @@ class LLM:
         tokenization_kwargs: Optional[dict[str, Any]] = None,
         lora_request: Optional[LoRARequest] = None,
         priority: int = 0,
+        idx_in_batch: int = -1,
+        batch_size: int = -1,
+        allocated_ranks: Optional[dict[str, int]] = None,
     ) -> None:
         request_id = str(next(self.request_counter))
-        self.llm_engine.add_request(
-            request_id,
-            prompt,
-            params,
-            lora_request=lora_request,
-            tokenization_kwargs=tokenization_kwargs,
-            priority=priority,
-        )
+
+        allocated, allocated_rank = self._dp_allocate(idx_in_batch)
+        if allocated:
+            self.llm_engine.add_request(
+                request_id,
+                prompt,
+                params,
+                lora_request=lora_request,
+                tokenization_kwargs=tokenization_kwargs,
+                priority=priority,
+            )
+        if allocated_ranks is not None:
+            allocated_ranks[request_id] = allocated_rank
 
     def _run_engine(
         self,

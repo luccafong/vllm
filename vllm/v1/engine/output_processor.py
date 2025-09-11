@@ -4,6 +4,8 @@
 import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
+import logging
+from math import log
 from typing import Any, Optional, Union, cast
 
 import torch
@@ -376,7 +378,8 @@ class OutputProcessor:
         If you need to touch every element of the batch, do it from
         within the loop below.
         """
-
+        print("Process output")
+        print(f"{len(engine_core_outputs)=}")
         request_outputs: Union[list[RequestOutput],
                                list[PoolingRequestOutput]] = []
         reqs_to_abort: list[str] = []
@@ -384,6 +387,7 @@ class OutputProcessor:
             req_id = engine_core_output.request_id
             req_state = self.request_states.get(req_id)
             if req_state is None:
+                print("request %s is not found", req_id)
                 # Ignore output for already-aborted request.
                 continue
 
@@ -427,7 +431,9 @@ class OutputProcessor:
                     request_outputs.append(request_output)
 
             # Free completed requests.
+            print("check if requet %s is finished", req_id)
             if finish_reason is not None:
+                print("request %s is finished", req_id)
                 self.request_states.pop(req_id)
                 # Remove parent request if applicable.
                 parent_req = req_state.parent_req

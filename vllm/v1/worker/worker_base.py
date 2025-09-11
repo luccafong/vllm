@@ -27,6 +27,7 @@ class WorkerBase(WorkerBaseV0):
         rank: int,
         distributed_init_method: str,
         is_driver_worker: bool = False,
+        uniq_schedule_spmd_mode: bool = False,
     ):
         """
         Initialize common worker components.
@@ -41,6 +42,7 @@ class WorkerBase(WorkerBaseV0):
         """
         # Configuration storage
         super().__init__(vllm_config=vllm_config)
+        self.uniq_schedule_spmd_mode = uniq_schedule_spmd_mode
 
         self.parallel_config.rank = rank
         self.local_rank = local_rank

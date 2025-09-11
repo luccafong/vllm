@@ -471,6 +471,7 @@ class CudaPlatformBase(Platform):
         group_size: int,
         timeout: timedelta,
     ) -> ProcessGroup:
+        logger.info(f"Initializing NCCL process group. with {group_rank=}, {group_size=}")
         assert is_nccl_available()
         pg: ProcessGroup = ProcessGroup(
             prefix_store,
@@ -486,6 +487,7 @@ class CudaPlatformBase(Platform):
                                          backend_options)
         backend_type = ProcessGroup.BackendType.NCCL
         device = torch.device("cuda")
+        logger.info(f"Setting default backend to {backend_type}")
         pg._set_default_backend(backend_type)
         backend_class._set_sequence_number_for_group()
 

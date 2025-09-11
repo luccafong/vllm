@@ -80,11 +80,30 @@ class EngineCore:
 
         # Setup Model.
         self.model_executor = executor_class(vllm_config)
+
+        self.model_executor
+
+        if (getattr(self.model_executor, "tp_rank", 0) != 0
+                or getattr(self.model_executor, "pp_rank", 0) != 0):
+            self.scheduless = True
+            print("Scheduless?")
+        self.inproc_dp_group = getattr(self.model_executor, "dp_group", None)
+        self.scheduless = False
         if executor_fail_callback is not None:
             self.model_executor.register_failure_callback(
                 executor_fail_callback)
 
         self.available_gpu_memory_for_kv_cache = -1
+        # No scheduler needed for distributed inference for folo
+        self.batch_queue_size = 0
+        self.batch_queue: Optional[deque[tuple[Future[ModelRunnerOutput],
+                                               SchedulerOutput]]] = None
+
+        self.request_block_hasher: Optional[Callable[[Request],
+                                                     list[BlockHash]]] = None
+        if self.scheduless:
+            self._scheduler = None
+            return
 
         # Setup KV Caches and update CacheConfig after profiling.
         num_gpu_blocks, num_cpu_blocks, kv_cache_config = \
@@ -120,7 +139,7 @@ class EngineCore:
             logger.info("Disabling chunked prefill for model without KVCache")
             vllm_config.scheduler_config.chunked_prefill_enabled = False
 
-        self.scheduler: SchedulerInterface = Scheduler(
+        self._scheduler = Scheduler(
             vllm_config=vllm_config,
             kv_cache_config=kv_cache_config,
             structured_output_manager=self.structured_output_manager,
@@ -139,15 +158,11 @@ class EngineCore:
         # schedule and execute batches, and is required by pipeline parallelism
         # to eliminate pipeline bubbles.
         self.batch_queue_size = self.model_executor.max_concurrent_batches
-        self.batch_queue: Optional[deque[tuple[Future[ModelRunnerOutput],
-                                               SchedulerOutput]]] = None
         if self.batch_queue_size > 1:
             logger.info("Batch queue is enabled with size %d",
                         self.batch_queue_size)
             self.batch_queue = deque(maxlen=self.batch_queue_size)
 
-        self.request_block_hasher: Optional[Callable[[Request],
-                                                     list[BlockHash]]] = None
         if (self.vllm_config.cache_config.enable_prefix_caching
                 or self.scheduler.get_kv_connector() is not None):
 
@@ -158,6 +173,16 @@ class EngineCore:
 
             self.request_block_hasher = get_request_block_hasher(
                 block_size, caching_hash_fn)
+
+    @property
+    def scheduler(self) -> SchedulerInterface:
+        if not isinstance(self._scheduler, SchedulerInterface):
+            raise RuntimeError("Scheduler is not initialized")
+        return self._scheduler
+
+    @property
+    def scheduless_mode(self) -> bool:
+        return self._scheduler is None
 
     def _initialize_kv_caches(
             self, vllm_config: VllmConfig) -> tuple[int, int, KVCacheConfig]:
@@ -969,7 +994,7 @@ class DPEngineCoreProc(EngineCoreProc):
         self.step_counter = 0
         self.current_wave = 0
         self.last_counts = (0, 0)
-
+        logger.info(executor_class)
         # Initialize the engine.
         dp_rank = vllm_config.parallel_config.data_parallel_rank
         super().__init__(vllm_config, local_client, handshake_address,
@@ -996,6 +1021,7 @@ class DPEngineCoreProc(EngineCoreProc):
                          vllm_config.kv_transfer_config.engine_id)
 
         self.dp_rank = dp_rank
+        logger.debug("stateless init dp group with vllm_config: %s", vllm_config)
         self.dp_group = vllm_config.parallel_config.stateless_init_dp_group()
 
     def shutdown(self):

@@ -164,7 +164,7 @@ def run_multi_api_server(args: argparse.Namespace):
         if model_config.is_multimodal_model and orig_mm_processor_cache_gb > 0:
             logger.warning("Multi-modal processor cache is disabled because "
                            "it is not compatible with `api_server_count > 1`.")
-
+    print(f"{vllm_config=}")
     executor_class = Executor.get_class(vllm_config)
     log_stats = not engine_args.disable_log_stats
 

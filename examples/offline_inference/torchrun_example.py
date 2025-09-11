@@ -19,7 +19,7 @@ prompts = [
     "The president of the United States is",
     "The capital of France is",
     "The future of AI is",
-]
+] * 50
 
 # Create sampling parameters, the same across all ranks
 sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
@@ -30,9 +30,10 @@ sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
 # all ranks have the same random seed, so that sampling can be
 # deterministic across ranks.
 llm = LLM(
-    model="meta-llama/Llama-3.1-8B",
-    tensor_parallel_size=2,
-    pipeline_parallel_size=2,
+    model="/data/local/models/oss/qwen1.5_2.7B_moe_chat",
+    tensor_parallel_size=1,
+    data_parallel_size=4,
+    pipeline_parallel_size=1,
     distributed_executor_backend="external_launcher",
     max_model_len=32768,
     seed=1,
@@ -48,8 +49,8 @@ if dist.get_rank() == 0:
         generated_text = output.outputs[0].text
         print(f"Prompt: {prompt!r}\nGenerated text: {generated_text!r}\n")
         print("-" * 50)
-    """
-Further tips:
+        """
+    Further tips:
 
 1. to communicate control messages across all ranks, use the cpu group,
 a PyTorch ProcessGroup with GLOO backend.

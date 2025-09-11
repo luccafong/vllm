@@ -223,11 +223,14 @@ class GroupCoordinator:
         self_cpu_group = None
 
         for ranks in group_ranks:
+            logger.info(f"Creating group {self.unique_name}, {self.rank=}, with ranks {ranks} on {torch_distributed_backend}")
             device_group = torch.distributed.new_group(
                 ranks, backend=torch_distributed_backend)
             # a group with `gloo` backend, to allow direct coordination between
             # processes through the CPU.
+            logger.info("Creating CPU group")
             cpu_group = torch.distributed.new_group(ranks, backend="gloo")
+            logger.info(f"{self.rank=}, {ranks=}")
             if self.rank in ranks:
                 self.ranks = ranks
                 self.world_size = len(ranks)
@@ -920,17 +923,24 @@ _PP: Optional[GroupCoordinator] = None
 
 _DP: Optional[GroupCoordinator] = None
 
+_NON_DP: Optional[GroupCoordinator] = None
+
 
 def get_dp_group() -> GroupCoordinator:
-    assert _DP is not None, ("data parallel group is not initialized")
+    assert _DP is not None, "data parallel group is not initialized"
     return _DP
+
+
+def get_nondp_group() -> GroupCoordinator:
+    assert _NON_DP is not None, "non data parallel group is not initialized"
+    return _NON_DP
 
 
 _EP: Optional[GroupCoordinator] = None
 
 
 def get_ep_group() -> GroupCoordinator:
-    assert _EP is not None, ("expert parallel group is not initialized")
+    assert _EP is not None, "expert parallel group is not initialized"
     return _EP
 
 
@@ -991,13 +1001,15 @@ def init_distributed_environment(
         distributed_init_method, backend)
     from vllm.config import get_current_vllm_config
     config = get_current_vllm_config()
-    if config is not None and config.parallel_config.data_parallel_size > 1:
+    if config is not None and config.parallel_config.data_parallel_size > 1 and config.parallel_config.distributed_executor_backend != "external_launcher":
+
         parallel_config = config.parallel_config
+        # adjust the world size to take into account data parallelism
+        world_size = parallel_config.world_size_across_dp
+        # we still ue the same init method for data parallelism in external launcher
         # adjust to take into account data parallelism
         # offset the rank by the data parallel rank
         rank = parallel_config.data_parallel_rank * world_size + rank
-        # adjust the world size to take into account data parallelism
-        world_size = parallel_config.world_size_across_dp
         ip = parallel_config.data_parallel_master_ip
         port = parallel_config.get_next_dp_init_port()
         distributed_init_method = get_distributed_init_method(ip, port)
@@ -1034,6 +1046,7 @@ def init_distributed_environment(
     global _WORLD, _NODE_COUNT
     if _WORLD is None:
         ranks = list(range(torch.distributed.get_world_size()))
+        logger.debug("Initializing world group with ranks: %s, %d", ranks, local_rank)
         _WORLD = init_world_group(ranks, local_rank, backend)
         _NODE_COUNT = _node_count(_WORLD.cpu_group)
         logger.debug("Detected %d nodes in the distributed environment",
@@ -1104,6 +1117,8 @@ def initialize_model_parallel(
     group_ranks = all_ranks.view(-1, tensor_model_parallel_size).unbind(0)
     group_ranks = [x.tolist() for x in group_ranks]
 
+
+    logger.info("Init TP group with ranks: %s", group_ranks)
     # message queue broadcaster is only used in tensor model parallel group
     _TP = init_model_parallel_group(group_ranks,
                                     get_world_group().local_rank,
@@ -1146,10 +1161,19 @@ def initialize_model_parallel(
                                       3).reshape(-1,
                                                  data_parallel_size).unbind(0)
     group_ranks = [x.tolist() for x in group_ranks]
+    logger.info("Init DP group with ranks: %s", group_ranks)
     _DP = init_model_parallel_group(group_ranks,
                                     get_world_group().local_rank,
                                     backend,
                                     group_name="dp")
+    global _NON_DP
+    group_ranks = all_ranks.transpose(1, 3).reshape(data_parallel_size,
+                                                    -1).unbind(0)
+    group_ranks = [x.tolist() for x in group_ranks]
+    _NON_DP = init_model_parallel_group(group_ranks,
+                                        get_world_group().local_rank,
+                                        backend,
+                                        group_name="non_dp")
 
     global _EP
     assert _EP is None, ("expert parallel group is already initialized")

@@ -3,6 +3,7 @@
 
 import hashlib
 from dataclasses import field
+from math import log
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 import torch
@@ -198,7 +199,7 @@ class ParallelConfig:
 
         return answer
 
-    def stateless_init_dp_group(self) -> ProcessGroup:
+    def stateless_init_dp_group(self, backend="gloo", ip=None, port=None) -> ProcessGroup:
         # NOTE: In high-concurrency scenarios multiple processes
         # can pick the same (currently free) port through a race
         # condition when calling `get_open_port()`. When the first
@@ -215,13 +216,18 @@ class ParallelConfig:
         last_exc: Optional[Exception] = None
         for _ in range(max_retries):
             try:
+                # FIXME: tmp code change
+                port = self.get_next_dp_init_port() if port is None else port
+
+                logger.debug("Initializing data parallel group with port %d, %d, %s",
+                            port, self.data_parallel_rank, ip)
                 # use gloo since the engine process might not have cuda device
                 return stateless_init_torch_distributed_process_group(
-                    self.data_parallel_master_ip,
-                    self.get_next_dp_init_port(),
+                    self.data_parallel_master_ip if ip is None else ip,
+                    port,
                     self.data_parallel_rank,
                     self.data_parallel_size,
-                    backend="gloo")
+                    backend=backend)
             except DistNetworkError as e:
                 # We only want to retry when the root cause is EADDRINUSE.
                 if "EADDRINUSE" in str(e):
@@ -279,6 +285,7 @@ class ParallelConfig:
         return hashlib.sha256(str(factors).encode()).hexdigest()
 
     def __post_init__(self) -> None:
+        logger.info("paralel config is called")
         # Forward deprecated fields to their new location
         if self.num_redundant_experts is not None:
             self.eplb_config.num_redundant_experts = (
@@ -313,6 +320,11 @@ class ParallelConfig:
         # Continue with the rest of the initialization
         self.world_size = self.pipeline_parallel_size * \
             self.tensor_parallel_size
+        
+        print(f"{self.distributed_executor_backend=}, {self.data_parallel_size=}")
+        if self.distributed_executor_backend == "external_launcher":
+            logger.info("Using external launcher for distributed inference.")
+            self.world_size *= self.data_parallel_size
 
         if self.data_parallel_size_local > self.data_parallel_size:
             raise ValueError(
@@ -321,6 +333,11 @@ class ParallelConfig:
 
         if self.data_parallel_size > 1 or self.data_parallel_size_local == 0:
             # Data parallel was specified in the engine args.
+            if self.distributed_executor_backend == "external_launcher":
+                # For external launcher, we need to set the data parallel rank automatically
+                # We assume DP is the first dimension of parallelism, no external DP supported
+                import os
+                self.data_parallel_rank = int(os.environ["RANK"]) % self.data_parallel_size
             if not self._data_parallel_master_port_list:
                 self._data_parallel_master_port_list = get_open_ports_list(5)
             self.data_parallel_master_port = \
@@ -407,6 +424,17 @@ class ParallelConfig:
 
         if self.distributed_executor_backend is None and self.world_size == 1:
             self.distributed_executor_backend = "uni"
+
+    @property
+    def use_spmd_dp(self) -> bool:
+        return self.data_parallel_size > 1 and self.distributed_executor_backend == "external_launcher"
+    
+    def dp_simple_allocate(self, data_idx: int) -> tuple[bool, int]:
+        if self.use_spmd_dp:
+            rank = data_idx % self.data_parallel_size
+            return rank == self.data_parallel_rank, self.data_parallel_rank
+        else:
+            return True, 0
 
     @property
     def use_ray(self) -> bool:
