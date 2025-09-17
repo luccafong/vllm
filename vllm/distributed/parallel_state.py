@@ -828,24 +828,23 @@ class GroupCoordinator:
                 del cudagraph_wrapper.concrete_cudagraph_entries[key].cudagraph
             torch.cuda.empty_cache()
             gc.collect()
-        # torch._dynamo.reset_code_caches()
-        # from torch._inductor.cudagraph_trees import reset_cudagraph_trees
-        # reset_cudagraph_trees()
-        # torch._dynamo.reset()
+        piecewise_cudagraph = getattr(self, "compiled_model", None)
+        if piecewise_cudagraph:
+            print(f"Clean up piecewise cudagraph")
+            torch._dynamo.reset_code_caches()
+            torch._dynamo.reset()
+            from torch._inductor.cudagraph_trees import reset_cudagraph_trees
+            reset_cudagraph_trees()
+            del piecewise_cudagraph
         print("fanglu: Reset torch._dynamo done")
         if hasattr(self, "device_group"):
             torch.distributed.destroy_process_group(self.device_group)
-            print("fanglu: Destroying device group done")
             del self.device_group
         if hasattr(self, "cpu_group"):
-            print("fanglu: Destroying cpu group")
             torch.distributed.destroy_process_group(self.cpu_group)
-            print("fanglu: Destroying cpu group done")
             del self.cpu_group
         if self.device_communicator is not None:
-            print("fanglu: Destroying device communicator")
             self.device_communicator.destroy()
-            print("fanglu: Destroying device communicator done")
         if self.mq_broadcaster is not None:
             self.mq_broadcaster = None
 
@@ -1335,18 +1334,12 @@ def destroy_distributed_environment():
 
 
 def cleanup_dist_env_and_memory(shutdown_ray: bool = False):
-    print("fanglu: Cleaning up dist env and memory")
-    torch._dynamo.reset()
-    print("fanglu: Reset torch._dynamo done")
     destroy_model_parallel()
-    print("fanglu: Destroy model parallel done")
     destroy_distributed_environment()
-    print("fanglu: Destroy dist env done")
     if shutdown_ray:
         import ray  # Lazy import Ray
         ray.shutdown()
     gc.collect()
-    print("GC done")
     from vllm.platforms import current_platform
     empty_cache = current_platform.empty_cache
     if empty_cache is not None:

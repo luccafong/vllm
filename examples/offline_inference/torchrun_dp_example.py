@@ -33,9 +33,10 @@ llm = LLM(
     enable_expert_parallel=True,
     distributed_executor_backend="external_launcher",
     max_model_len=32768,
-    compilation_config={
-        "cudagraph_mode": "FULL",
-    },
+    gpu_memory_utilization=0.6,
+    # compilation_config={
+    #     "cudagraph_mode": "FULL",
+    # },
     # FIXME: with torch.compile, the torchrun processes do not exit properly
     # enforce_eager=True,
     seed=1,
@@ -59,7 +60,8 @@ for output in outputs:
     print(f"Prompt: {prompt!r}\nGenerated text: {generated_text!r}\n")
     print("-" * 50)
 
-cleanup_dist_env_and_memory()
+del llm
+# cleanup_dist_env_and_memory()
 """
 Further tips:
 

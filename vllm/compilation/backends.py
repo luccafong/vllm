@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import Any, Callable, Optional
 
+import traceback
 import torch
 import torch.fx as fx
 from torch._dispatch.python import enable_python_dispatcher
@@ -179,6 +180,7 @@ class CompilerManager:
         compiled_graph, handle = self.compiler.compile(
             graph, example_inputs, additional_inductor_config, runtime_shape,
             maybe_key)
+        print("get compiled graph")
 
         assert compiled_graph is not None, "Failed to compile the graph"
 
@@ -354,6 +356,7 @@ class PiecewiseCompileInterpreter(torch.fx.Interpreter):
                 # CUDAGraphWrapper for piecewise_backend, to distinguish
                 # it from the FULL cudagraph runtime mode, no matter it
                 # is wrapped on a full or piecewise fx graph.
+                print(f"{static_graph_wrapper_class=}")
                 self.module.__dict__[target] = static_graph_wrapper_class(
                     runnable=piecewise_backend,
                     vllm_config=self.vllm_config,
@@ -465,7 +468,8 @@ class VllmBackend:
         inductor_config[PASS_KEY] = self.post_grad_pass_manager
 
     def __call__(self, graph: fx.GraphModule, example_inputs) -> Callable:
-
+        print("backend is called")
+        traceback.print_exc()
         vllm_config = self.vllm_config
         if not self.compilation_config.cache_dir:
             # no provided cache dir, generate one based on the known factors
@@ -576,9 +580,10 @@ class VllmBackend:
 
         # propagate the split graph to the piecewise backend,
         # compile submodules with symbolic shapes
-        PiecewiseCompileInterpreter(self.split_gm, submod_names_to_compile,
+        self.interpreter = PiecewiseCompileInterpreter(self.split_gm, submod_names_to_compile,
                                     self.vllm_config,
-                                    self).run(*example_inputs)
+                                    self)
+        self.interpreter.run(*example_inputs)
 
         graph_path = os.path.join(local_cache_dir, "computation_graph.py")
         if not os.path.exists(graph_path):

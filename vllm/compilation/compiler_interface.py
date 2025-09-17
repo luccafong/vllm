@@ -232,7 +232,7 @@ class InductorStandaloneAdaptor(CompilerInterface):
             path=path, format="unpacked")
         from torch._inductor.compile_fx import graph_returns_tuple
         returns_tuple = graph_returns_tuple(graph)
-
+        print("Loading from inductor standalone adaptor.")
         def compiled_graph_wrapper(*args):
             graph_output = inductor_compiled_graph(*args)
             # unpack the tuple if needed
@@ -495,6 +495,7 @@ class InductorAdaptor(CompilerInterface):
                 from torch._inductor.output_code import (
                     CompiledFxGraphConstantsWithGm)
                 constants = CompiledFxGraphConstantsWithGm(graph)
+                print("Loding from fx graph cache")
                 inductor_compiled_graph, _ = FxGraphCache._lookup_graph(
                     hash_str, example_inputs, True, None, constants)
                 assert inductor_compiled_graph is not None, (

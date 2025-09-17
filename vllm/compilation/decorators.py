@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import inspect
+from re import NOFLAG
 from typing import Callable, Optional, TypeVar, Union, overload
 from unittest.mock import patch
 
@@ -192,6 +193,7 @@ def _support_torch_compile(
     cls.__bases__ = cls.__bases__ + (TorchCompileWrapperWithCustomDispatcher, )
 
     old_init = cls.__init__
+    old_del = cls.__del__
 
     setattr(cls, IGNORE_COMPILE_KEY, False)
 
@@ -213,7 +215,17 @@ def _support_torch_compile(
         TorchCompileWrapperWithCustomDispatcher.__init__(
             self, compilation_level=vllm_config.compilation_config.level)
 
+    def __del__(self):
+        print("I should have been called")
+        assert self is not None
+        print("I am called, great!")
+        if self.backend is not None:
+            print("cleanup backend now")
+            del self.backend.interpreter.module.__dict__
+        old_del(self)
+    print(f"Replacing the del of {cls=}")
     cls.__init__ = __init__
+    cls.__del__ = __del__
 
     def __call__(self, *args, **kwargs):
         # torch.compiler.is_compiling() means we are inside the compilation

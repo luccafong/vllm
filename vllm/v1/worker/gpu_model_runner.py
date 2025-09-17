@@ -179,6 +179,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         scheduler_config = self.scheduler_config
         parallel_config = self.parallel_config
         self.device = device
+        self.backend = None
         self.pin_memory = is_pin_memory_available()
         self.dtype = self.model_config.dtype
         if cache_config.cache_dtype == "auto":
@@ -2386,6 +2387,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             logger.info("Loading model from scratch...")
             self.model = model_loader.load_model(
                 vllm_config=self.vllm_config, model_config=self.model_config)
+            print(f"{self.model.model.backend=}")
             if self.lora_config:
                 self.model = self.load_lora_model(self.model,
                                                   self.model_config,
@@ -2410,6 +2412,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     time_after_load - time_before_load)
         prepare_communication_buffer_for_model(self.model)
 
+        print(f"{self.model.model.backend=}")
         if is_mixture_of_experts(
                 self.model) and self.parallel_config.enable_eplb:
             logger.info("EPLB is enabled for model %s.",
@@ -2429,14 +2432,16 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         ):
             backend = self.vllm_config.compilation_config.init_backend(
                 self.vllm_config)
+            self.backend = backend
             compilation_counter.dynamo_as_is_count += 1
             self.model.compile(
                 fullgraph=envs.VLLM_TEST_DYNAMO_FULLGRAPH_CAPTURE,
                 backend=backend)
+            
             return
         # for other compilation levels, cudagraph behavior is controlled by
         # CudagraphWraper and CudagraphDispatcher of vllm.
-
+        setattr(get_dp_group(), "compiled_model", self.model)
         # wrap the model with full cudagraph wrapper if needed.
         if self.compilation_config.cudagraph_mode.has_full_cudagraphs():
             self.model = CUDAGraphWrapper(self.model,
@@ -3763,3 +3768,14 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
 
     def __del__(self):
         print("GPU Model Runner is called.")
+        # del self.model
+        print(f"{self.model=}")
+        del self.model
+        
+        # if self.model.model is not None and hasattr(self.model.model, "backend"):
+        #     backend = self.model.model.backend
+        #     print("Clean up the graphs")
+        #     if backend is not None:
+        #         del backend.interpreter.module.__dict__
+        #         del self.model.model.backend
+        print("GPU Model Runner is cleanedup.")
