@@ -30,7 +30,7 @@ from vllm.distributed.kv_transfer import (get_kv_transfer_group,
                                           has_kv_transfer_group)
 from vllm.distributed.kv_transfer.kv_connector.utils import copy_kv_blocks
 from vllm.distributed.parallel_state import (
-    get_pp_group, get_tp_group, graph_capture, is_global_first_rank,
+    get_dp_group, get_pp_group, get_tp_group, graph_capture, is_global_first_rank,
     prepare_communication_buffer_for_model)
 from vllm.forward_context import (BatchDescriptor, DPMetadata,
                                   set_forward_context)
@@ -2442,6 +2442,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             self.model = CUDAGraphWrapper(self.model,
                                           self.vllm_config,
                                           runtime_mode=CUDAGraphMode.FULL)
+            setattr(get_dp_group(), "model", self.model)
 
     def reload_weights(self) -> None:
         assert getattr(self, "model", None) is not None, \
@@ -3093,6 +3094,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         set_cudagraph_capturing_enabled(True)
         with freeze_gc(), graph_capture(device=self.device):
             cudagraph_mode = self.compilation_config.cudagraph_mode
+            print(f"{cudagraph_mode}")
             if cudagraph_mode.mixed_mode() != CUDAGraphMode.NONE:
                 cudagraph_runtime_mode = cudagraph_mode.mixed_mode()
 
@@ -3306,6 +3308,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         self.cudagraph_dispatcher.initialize_cudagraph_keys(
             self.compilation_config.cudagraph_mode,
             self.uniform_decode_query_len)
+        setattr(get_dp_group(), "dispatcher", self.cudagraph_dispatcher)
 
     def calculate_reorder_batch_threshold(self) -> None:
         """
@@ -3757,3 +3760,6 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         self.transfer_event.record()
         self.transfer_event.synchronize()
         return pinned.tolist()
+
+    def __del__(self):
+        print("GPU Model Runner is called.")
