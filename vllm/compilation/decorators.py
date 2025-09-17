@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import inspect
-from re import NOFLAG
 from typing import Callable, Optional, TypeVar, Union, overload
 from unittest.mock import patch
 
@@ -193,7 +192,7 @@ def _support_torch_compile(
     cls.__bases__ = cls.__bases__ + (TorchCompileWrapperWithCustomDispatcher, )
 
     old_init = cls.__init__
-    old_del = cls.__del__
+    old_del = cls.__del__ if hasattr(cls, '__del__') else None
 
     setattr(cls, IGNORE_COMPILE_KEY, False)
 
@@ -222,7 +221,8 @@ def _support_torch_compile(
         if self.backend is not None:
             print("cleanup backend now")
             del self.backend.interpreter.module.__dict__
-        old_del(self)
+        if old_del is not None:
+            old_del(self)
     print(f"Replacing the del of {cls=}")
     cls.__init__ = __init__
     cls.__del__ = __del__

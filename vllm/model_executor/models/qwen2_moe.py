@@ -392,9 +392,6 @@ class Qwen2MoeModel(nn.Module):
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
 
-
-    def __del__(self):
-        print("qwen2moemodel del is called")
     def get_expert_mapping(self) -> list[tuple[str, str, int, str]]:
         # Params for weights, fp8 weight scales, fp8 activation scales
         # (param_name, weight_name, expert_id, shard_id)
@@ -520,7 +517,6 @@ class Qwen2MoeForCausalLM(nn.Module, SupportsPP, SupportsLoRA):
         self.quant_config = quant_config
         self.model = Qwen2MoeModel(vllm_config=vllm_config,
                                    prefix=maybe_prefix(prefix, "model"))
-        assert self.model.backend is not None
         self.lm_head = ParallelLMHead(config.vocab_size,
                                       config.hidden_size,
                                       quant_config=quant_config)
@@ -529,7 +525,6 @@ class Qwen2MoeForCausalLM(nn.Module, SupportsPP, SupportsLoRA):
         self.logits_processor = LogitsProcessor(config.vocab_size)
         self.make_empty_intermediate_tensors = (
             self.model.make_empty_intermediate_tensors)
-
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.get_input_embeddings(input_ids)
@@ -563,6 +558,6 @@ class Qwen2MoeForCausalLM(nn.Module, SupportsPP, SupportsLoRA):
         return self.model.get_expert_mapping()
 
     def __del__(self):
-        self.model.__del__()
+        del self.model
         print("qwen moe del is called")
         # del self.model

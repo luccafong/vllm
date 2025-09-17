@@ -37,7 +37,6 @@ class TorchCompileWrapperWithCustomDispatcher:
 
         vllm_config = get_current_vllm_config()
         self.vllm_config = vllm_config
-        print(f"I am called with {self=}")
         self.backend = None
         if compiled_callable is None:
             # default compilation settings
@@ -54,9 +53,7 @@ class TorchCompileWrapperWithCustomDispatcher:
                 fullgraph=envs.VLLM_TEST_DYNAMO_FULLGRAPH_CAPTURE,
                 backend=backend,
                 options=options)
-            print(f"backend is assigned to {self=}")
             self.backend = backend
-            print(f"{self.backend=}")
         self.compiled_callable = compiled_callable
         self.original_code_object = self.__class__.forward.__code__
         self.compiled_codes: list[CodeType] = []
@@ -140,8 +137,3 @@ class TorchCompileWrapperWithCustomDispatcher:
         self.__class__.forward.__code__ = self.compiled_codes[index]
         yield
         self.__class__.forward.__code__ = self.original_code_object
-
-    def __del__(self):
-        print("I am called, great!")
-        if self.backend is not None:
-            del self.backend.interpreter.module.__dict__
