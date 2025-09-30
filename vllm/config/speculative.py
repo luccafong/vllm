@@ -39,6 +39,8 @@ SpeculativeMethod = Literal["ngram", "eagle", "eagle3", "medusa",
 class SpeculativeConfig:
     """Configuration for speculative decoding."""
 
+    """Override the default enforce_eager from model_config"""
+    enforce_eager: bool = False
     # General speculative decoding control
     num_speculative_tokens: SkipValidation[int] = None  # type: ignore
     """The number of speculative tokens, if provided. It will default to the
@@ -208,6 +210,10 @@ class SpeculativeConfig:
                         "mimo","ernie4_5_moe", "qwen3_next")):
                 # use the draft model from the same model:
                 self.model = self.target_model_config.model
+                if self.target_model_config.hf_text_config.model_type == "deepseek_v32":
+                    # FIXME(luccafong): cudgraph with v32 MTP is not supported, remove this when
+                    # the issue is fixed.
+                    self.enforce_eager = True
                 # Align the quantization of draft model for cases such as
                 # --quantization fp8 with a bf16 checkpoint.
                 if not self.quantization:
