@@ -103,6 +103,7 @@ class CoreEngineProcManager:
             "handshake_address": handshake_address,
             "executor_class": executor_class,
             "log_stats": log_stats,
+            "engine_index": vllm_config.parallel_config.distributed_node_rank,
         }
 
         if client_handshake_address:
@@ -760,8 +761,13 @@ def launch_core_engines(
     # In offline mode there is an LLM instance per DP rank and
     # one core engine per LLM, see
     # examples/offline_inference/data_parallel.py.
+    print(f"{local_start_index=}")
     offline_mode = local_start_index is not None
 
+    if parallel_config.distributed_node_size > 1:
+        host = parallel_config.distributed_master_ip
+        offline_mode = False
+        local_engine_count = 1
     # client_local_only = True for cases where this front-end
     # sends requests only to colocated engines.
     client_local_only = (
@@ -810,17 +816,25 @@ def launch_core_engines(
 
         yield engine_actor_manager, coordinator, addresses
         return
+    distributed_node_rank = (
+        parallel_config.distributed_node_rank if parallel_config.distributed_node_size > 0
+        else dp_rank
+    )
+    distributed_node_size = (
+        parallel_config.distributed_node_size if parallel_config.distributed_node_size > 0
+        else dp_size
+    )
 
     if offline_mode:
         assert local_engine_count == 1
         engines_to_handshake = [CoreEngine(index=dp_rank, local=True)]
-    elif dp_rank == 0:
+    elif distributed_node_rank == 0:
         # Rank 0 holds Coordinator, so it handshakes with all Cores
         # in both external dplb and internal dplb mode.
         # Note this also covers the case where we have zero local engines
         # and rank 0 is headless.
         engines_to_handshake = [
-            CoreEngine(index=i, local=(i < local_engine_count)) for i in range(dp_size)
+            CoreEngine(index=i, local=(i < local_engine_count)) for i in range(distributed_node_size)
         ]
     else:
         # Rank > 0 handshakes with just the local cores it is managing.
@@ -837,7 +851,7 @@ def launch_core_engines(
     # front-end processes. In external_dp_lb mode, ranks > 0 handshake with
     # their co-located frontend and also the rank 0 front-end, and hence this
     # will be False.
-    handshake_local_only = offline_mode or local_engine_count == dp_size
+    handshake_local_only = offline_mode or local_engine_count == distributed_node_size
 
     handshake_address = get_engine_client_zmq_addr(
         handshake_local_only, host, parallel_config.data_parallel_rpc_port
@@ -1008,7 +1022,7 @@ def wait_for_engine_startup(
             # Setup KV cache config with initialization state from
             # engine core process. Sum values from all engines in DP case.
             num_gpu_blocks = cache_config.num_gpu_blocks or 0
-            num_gpu_blocks += msg["num_gpu_blocks"]
+            num_gpu_blocks += msg["num_gpu_blocks"] or 0
             cache_config.num_gpu_blocks = num_gpu_blocks
             # In external DP LB mode, the coordinator address that the
             # front-end procs connect to is obtained from rank 0 via

@@ -500,10 +500,18 @@ class MPClient(EngineCoreClient):
                 parallel_config.data_parallel_hybrid_lb
                 or parallel_config.data_parallel_external_lb
             )
+            if parallel_config.distributed_node_size > 1:
+                engine_rank = parallel_config.distributed_node_rank
+            else:
+                engine_rank = dp_rank
 
             num_ranks = dp_local_size if local_engines_only else dp_size
+
+            if parallel_config.distributed_node_size > 1:
+                num_ranks = parallel_config.distributed_node_size
+                offline_mode = False
             self.engine_ranks_managed = (
-                [dp_rank] if offline_mode else list(range(dp_rank, dp_rank + num_ranks))
+                [engine_rank] if offline_mode else list(range(engine_rank, engine_rank + num_ranks))
             )
             assert parallel_config.data_parallel_size_local <= len(
                 self.engine_ranks_managed
@@ -516,6 +524,9 @@ class MPClient(EngineCoreClient):
 
             # Wait for ready messages from each engine on the input socket.
             identities = set(self.core_engines)
+            print(f"{identities=}")
+            for x in identities:
+                print(f"{x=}")
             sync_input_socket = zmq.Socket.shadow(self.input_socket)
             while identities:
                 if not sync_input_socket.poll(timeout=600_000):

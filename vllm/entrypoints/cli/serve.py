@@ -52,7 +52,9 @@ class ServeSubcommand(CLISubcommand):
         if hasattr(args, "model_tag") and args.model_tag is not None:
             args.model = args.model_tag
 
-        if args.headless or args.api_server_count < 1:
+        if (
+            args.headless or args.api_server_count < 1
+            or args.distributed_node_rank > 0):
             run_headless(args)
         else:
             if args.api_server_count > 1:
@@ -105,6 +107,11 @@ def run_headless(args: argparse.Namespace):
 
     host = parallel_config.data_parallel_master_ip
     port = engine_args.data_parallel_rpc_port  # add to config too
+    start_index = vllm_config.parallel_config.data_parallel_rank
+    if parallel_config.distributed_node_rank > 0:
+        host = parallel_config.distributed_master_ip
+        port = parallel_config.data_parallel_rpc_port
+        start_index = parallel_config.distributed_node_rank
     handshake_address = get_tcp_uri(host, port)
 
     # Catch SIGTERM and SIGINT to allow graceful shutdown.
