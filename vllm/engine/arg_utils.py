@@ -1422,6 +1422,7 @@ class EngineArgs:
 
         data_parallel_external_lb = self.data_parallel_rank is not None
         # Local DP rank = 1, use pure-external LB.
+        print(f"{self.data_parallel_size_local=}, {self.data_parallel_start_rank=}")
         if data_parallel_external_lb:
             assert self.data_parallel_size_local in (1, None), (
                 "data_parallel_size_local must be 1 when data_parallel_rank is set"

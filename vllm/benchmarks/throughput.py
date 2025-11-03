@@ -90,6 +90,7 @@ def run_vllm(
         start = time.perf_counter()
         if do_profile:
             llm.start_profile()
+        print(f"Running {len(prompts)} requests")
         outputs = llm.generate(
             prompts, sampling_params, lora_request=lora_requests, use_tqdm=True
         )
@@ -344,6 +345,7 @@ def get_requests(args, tokenizer):
     if args.dataset_path is None or args.dataset_name == "random":
         sample_kwargs["range_ratio"] = args.random_range_ratio
         sample_kwargs["prefix_len"] = args.prefix_len
+        sample_kwargs["batch_size"] = args.hf_max_batch_size
         dataset_cls = RandomDataset
     elif args.dataset_name == "sharegpt":
         dataset_cls = ShareGPTDataset
@@ -386,21 +388,26 @@ def get_requests(args, tokenizer):
         raise ValueError(f"Unknown dataset name: {args.dataset_name}")
     # Remove None values
     sample_kwargs = {k: v for k, v in sample_kwargs.items() if v is not None}
+    print(f"{sample_kwargs=}")
     requests = dataset_cls(**common_kwargs).sample(**sample_kwargs)
-    requests = filter_requests_for_dp(requests, args.data_parallel_size)
+    requests = filter_requests_for_dp(requests, args.data_parallel_size, args.distributed_executor_backend)
     return requests
 
 
-def filter_requests_for_dp(requests, data_parallel_size):
+def filter_requests_for_dp(requests, data_parallel_size, backend: str):
     # Note(zhuohan): The way we get data_parallel_rank is hacky and only
     # works for external launcher mode. Should be cleaned up and deprecated
     # in the future with a better vLLM distributed process design.
+    data_parallel_size = int(os.environ.get("VLLM_DP_SIZE", data_parallel_size))
     if data_parallel_size == 1:
         return requests
-
-    global_rank = int(os.environ["RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
-    data_parallel_rank = global_rank // (world_size // data_parallel_size)
+    if backend == "external_launcher":
+        global_rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        data_parallel_rank = global_rank // (world_size // data_parallel_size)
+    else:
+        # MP executor with offline mode
+        data_parallel_rank = int(os.environ["VLLM_DP_RANK"])
     return [
         r
         for i, r in enumerate(requests)
@@ -500,8 +507,8 @@ def validate_args(args):
     # === Backend-specific Validations ===
     if args.backend == "hf" and args.hf_max_batch_size is None:
         raise ValueError("HF max batch size is required for HF backend")
-    if args.backend != "hf" and args.hf_max_batch_size is not None:
-        raise ValueError("HF max batch size is only for HF backend.")
+    # if args.backend != "hf" and args.hf_max_batch_size is not None:
+    #     raise ValueError("HF max batch size is only for HF backend.")
 
     if (
         args.backend in {"hf", "mii"}
@@ -519,15 +526,15 @@ def validate_args(args):
     if args.data_parallel_size > 1 and (
         args.distributed_executor_backend != "external_launcher" or args.async_engine
     ):
-        # --data-parallel is not supported fully.
-        # Old issue: https://github.com/vllm-project/vllm/issues/16222
-        # Currently we only support data parallel with external launcher
-        # mode (i.e., launch with toruchrun).
-        raise ValueError(
-            "Data parallel is only supported with external launcher mode "
-            "with synchronous engine in offline benchmark, "
-            "please use benchmark serving instead"
-        )
+        os.environ["VLLM_DP_SIZE"] = str(args.data_parallel_size)
+        args.data_parallel_size = 1
+        os.environ["VLLM_DP_RANK"] = str(args.data_parallel_rank)
+        args.data_parallel_rank = None
+        os.environ["VLLM_DP_MASTER_IP"] = args.data_parallel_address
+        args.data_parallel_address = None
+        os.environ["VLLM_DP_MASTER_PORT"] = "29501"
+        # Currently we only support 1 dp size per benchmark process
+        os.environ["VLLM_DP_RANK_LOCAL"] = "0"
 
 
 def add_cli_args(parser: argparse.ArgumentParser):
