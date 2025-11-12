@@ -294,6 +294,13 @@ def fused_marlin_moe(
     )
 
     assert activation is not None
+    # [1;36m(EngineCore_DP5 pid=622321)[0;0m intermediate_cache13=None, intermediate_cache2=None hidden_states.dtype=torch.bfloat16, w1.dtype=torch.int32, w2.dtype=torch.int32, w1_scale.dtype=torch.bfloat16, w2_scale.dtype=torch.bfloat16, w1_scale.dtype=torch.bfloat16
+    # [1;36m(EngineCore_DP0 pid=622316)[0;0m quant_type=ScalarType.uint4b8, topk=8, apply_router_weight_on_input=False, activation='silu', , 
+    # [1;36m(EngineCore_DP0 pid=622316)[0;0m intermediate_cache13=None, intermediate_cache2=None hidden_states.dtype=torch.bfloat16, w1.dtype=torch.int32, w2.dtype=torch.int32, w1_scale.dtype=torch.bfloat16, w2_scale.dtype=torch.bfloat16, w1_scale.dtype=torch.bfloat16
+# [1;36m(EngineCore_DP6 pid=1207916)[0;0m quant_type=ScalarType.float4_e2m1f, topk=1, apply_router_weight_on_input=False, activation='silu', , 
+
+#    print(f"{quant_type=}, {topk=}, {apply_router_weight_on_input=}, {activation=}, {global_scale1.dtype if global_scale1 else ""}, {global_scale2.dtype if global_scale2 else ""}")
+#    print(f"intermediate_cache13={intermediate_cache13.dtype if intermediate_cache13 is not None else None}, intermediate_cache2={intermediate_cache2.dtype if intermediate_cache2 is not None else None} {hidden_states.dtype=}, {w1.dtype=}, {w2.dtype=}, {w1_scale.dtype=}, {w2_scale.dtype=}, {w1_scale.dtype=}")
     moe_output = _fused_marlin_moe(
         hidden_states=hidden_states,
         w1=w1,
@@ -460,6 +467,10 @@ def batched_fused_marlin_moe(
     )
 
     assert activation is not None
+#   [1;36m(EngineCore_DP6 pid=1532670)[0;0m hidden_states.dtype=torch.bfloat16, w1.dtype=torch.int32, w2.dtype=torch.int32, w1_scale.dtype=torch.bfloat16, w2_scale.dtype=torch.bfloat16, w1_scale.dtype=torch.bfloat16
+# [1;36m(EngineCore_DP3 pid=2095555)[0;0m hidden_states.dtype=torch.bfloat16, w1.dtype=torch.int32, w2.dtype=torch.int32, w1_scale.dtype=torch.bfloat16, w2_scale.dtype=torch.bfloat16, w1_scale.dtype=torch.bfloat16
+    print(f"{quant_type=}, {topk=}, {apply_router_weight_on_input=}, {activation=}, {global_scale1.dtype if global_scale1 else ""}, {global_scale2.dtype if global_scale2 else ""}")
+    print(f"intermediate_cache13={intermediate_cache13.dtype if intermediate_cache13 is not None else None}, intermediate_cache2={intermediate_cache2.dtype if intermediate_cache2 is not None else None} {hidden_states.dtype=}, {w1.dtype=}, {w2.dtype=}, {w1_scale.dtype=}, {w2_scale.dtype=}, {w1_scale.dtype=}")
     output = _fused_marlin_moe(
         hidden_states=hidden_states.view(-1, K),
         w1=w1,
@@ -501,7 +512,7 @@ def batched_fused_marlin_moe(
 class MarlinExpertsBase(mk.FusedMoEPermuteExpertsUnpermute):
     def __init__(self, quant_config: FusedMoEQuantConfig):
         # TODO (varun) : Enable activation quantization
-        assert quant_config.use_mxfp4_w4a16, "Supports only mxfp4_w4a16"
+        assert quant_config.use_mxfp4_w4a16 or quant_config.use_int4_w4a16, "Supports only mxfp4_w4a16 or int4_w4a16"
         super().__init__(quant_config)
 
     def moe_problem_size(
@@ -720,7 +731,7 @@ class BatchedMarlinExperts(MarlinExpertsBase):
             w1_scale=self.w1_scale,
             w2_scale=self.w2_scale,
             gating_output=None,
-            quant_type_id=scalar_types.float4_e2m1f.id,  # works only for w4a16
+            quant_type_id=scalar_types.uint4b8.id,  # works only for w4a16 #TODO: pass in instead of hardcode
             apply_router_weight_on_input=apply_router_weight_on_input,
             global_num_experts=global_num_experts,
             activation=activation,

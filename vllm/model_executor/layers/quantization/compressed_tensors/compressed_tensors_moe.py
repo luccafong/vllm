@@ -31,6 +31,11 @@ from vllm.model_executor.layers.fused_moe.config import (
     int8_w8a16_moe_quant_config,
     nvfp4_moe_quant_config,
 )
+from vllm.model_executor.layers.fused_moe.fused_marlin_moe import (
+    BatchedMarlinExperts,
+    MarlinExperts,
+    fused_marlin_moe,
+)
 from vllm.model_executor.layers.fused_moe.cpu_fused_moe import select_experts
 from vllm.model_executor.layers.fused_moe.flashinfer_cutlass_moe import (
     is_valid_flashinfer_cutlass_fused_moe,
@@ -1562,8 +1567,53 @@ class CompressedTensorsWNA16MarlinMoEMethod(CompressedTensorsMoEMethod):
     def get_fused_moe_quant_config(
         self, layer: torch.nn.Module
     ) -> FusedMoEQuantConfig | None:
-        return None
+        assert self.num_bits == 4 or self.num_bits == 8
+        config_builder = (
+            int4_w4a16_moe_quant_config
+            if self.num_bits == 4
+            else int8_w8a16_moe_quant_config
+        )
+        logger.info("get fused moe quant")
 
+        return config_builder(
+            w1_scale=layer.w13_weight_scale,
+            w2_scale=layer.w2_weight_scale,
+            w1_zp=None,
+            w2_zp=None,
+            block_shape=[0, self.group_size],
+        )
+    
+    def select_gemm_impl(
+        self,
+        prepare_finalize: mk.FusedMoEPrepareAndFinalize,
+        layer: torch.nn.Module,
+    ) -> mk.FusedMoEPermuteExpertsUnpermute:
+        logger.info(f"Select gemm impl")
+        if (
+            prepare_finalize.activation_format
+            == mk.FusedMoEActivationFormat.BatchedExperts
+        ):
+
+            return BatchedMarlinExperts(
+                    max_num_tokens=prepare_finalize.max_num_tokens_per_rank(),
+                    num_dispatchers=prepare_finalize.num_dispatchers(),
+                    quant_config=self.moe_quant_config,
+            )
+        else:
+            layer.w13_weight = (
+                self.w13_weight_triton_tensor
+                if layer.w13_weight is None
+                else layer.w13_weight
+            )
+            layer.w2_weight = (
+                self.w2_weight_triton_tensor
+                if layer.w2_weight is None
+                else layer.w2_weight
+            )
+            assert all([w is not None for w in [layer.w13_weight, layer.w2_weight]])
+
+            assert self.moe_quant_config is not None
+            return MarlinExperts(self.moe_quant_config)
     def apply(
         self,
         layer: torch.nn.Module,
@@ -1826,7 +1876,6 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
             w2_zp=None,
             block_shape=[0, self.group_size],
         )
-
     def apply(
         self,
         layer: torch.nn.Module,

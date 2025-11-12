@@ -147,6 +147,7 @@ class FusedMoEMethodBase(QuantizeMethodBase):
     ) -> FusedMoEPrepareAndFinalize | None:
         all2all_manager = get_ep_group().device_communicator.all2all_manager
         assert all2all_manager is not None
+#        logger.info("make prepare finalize")
 
         prepare_finalize: FusedMoEPrepareAndFinalize | None = None
 
@@ -224,6 +225,8 @@ class FusedMoEMethodBase(QuantizeMethodBase):
                 and quant_config.block_shape == DEEPEP_QUANT_BLOCK_SHAPE
             )
 
+            logger.info("DeepEPLLPrepareAndFinalize to be added")
+
             prepare_finalize = DeepEPLLPrepareAndFinalize(
                 handle,
                 max_tokens_per_rank=moe.max_num_tokens,
@@ -234,6 +237,7 @@ class FusedMoEMethodBase(QuantizeMethodBase):
         return prepare_finalize
 
     def maybe_make_prepare_finalize(self) -> FusedMoEPrepareAndFinalize | None:
+        print(f"{self.moe.moe_parallel_config.use_all2all_kernels=}")
         if self.moe.moe_parallel_config.use_all2all_kernels:
             return FusedMoEMethodBase._maybe_make_prepare_finalize(
                 self.moe, self.moe_quant_config
@@ -435,8 +439,8 @@ class FusedMoEModularMethod(FusedMoEMethodBase, CustomOp):
 
         result = self.fused_experts(
             hidden_states=x,
-            w1=layer.w13_weight,
-            w2=layer.w2_weight,
+            w1=layer.w13_weight_packed,
+            w2=layer.w2_weight_packed,
             topk_weights=topk_weights,
             topk_ids=topk_ids,
             inplace=self.allow_inplace,
@@ -1444,6 +1448,7 @@ class FusedMoE(CustomOp):
             if quant_method is None:
                 quant_method = UnquantizedFusedMoEMethod(self.moe_config)
             assert isinstance(quant_method, FusedMoEMethodBase)
+            logger.info(f"{quant_method=}")
             return quant_method
 
         # Note: get_quant_method will look at the layer's local_num_experts
@@ -1509,6 +1514,7 @@ class FusedMoE(CustomOp):
     # should be safe to swap out the quant_method.
     def maybe_init_modular_kernel(self) -> None:
         mk = self.quant_method.maybe_init_modular_kernel(self)
+        logger.info(f"{mk=}")
         if mk is not None:
             self.quant_method = FusedMoEModularMethod(self.quant_method, mk)
 
