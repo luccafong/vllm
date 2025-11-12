@@ -41,6 +41,8 @@ QuantizationMethods = Literal[
     "cpu_gptq",
     "cpu_awq",
 ]
+
+
 QUANTIZATION_METHODS: list[str] = list(get_args(QuantizationMethods))
 
 # The customized quantization methods which will be added to this dict.
@@ -204,6 +206,12 @@ def get_default_quantization_hf_config(
             "quant_method": "compressed-tensors",
             "quantization_status": "compressed",
         }
+    logger.warning_once(
+        "No default quantization hf config found for quantization %s and "
+        "quantization_schema %s",
+        quantization,
+        quantization_schema,
+    )
     return {}
 
 
