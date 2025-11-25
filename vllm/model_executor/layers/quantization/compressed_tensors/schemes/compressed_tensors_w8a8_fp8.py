@@ -7,6 +7,7 @@ import torch
 from compressed_tensors.quantization import QuantizationArgs, QuantizationStrategy
 from torch.nn import Parameter
 
+from vllm import _custom_ops as ops
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.logger import init_logger
 from vllm.model_executor.layers.quantization.compressed_tensors.schemes import (
@@ -180,6 +181,11 @@ class CompressedTensorsW8A8Fp8(CompressedTensorsScheme):
 
     def process_weights_after_loading(self, layer) -> None:
         if self.strategy == QuantizationStrategy.TENSOR:
+            if not self.quant_config.is_checkpoint_fp8_serialized:
+                qweight, layer.weight_scale = ops.scaled_fp8_quant(
+                    layer.weight, scale=None
+                )
+                layer.weight = qweight.t()
             weight, weight_scale, input_scale = process_fp8_weight_tensor_strategy(
                 layer.weight,
                 layer.weight_scale,
@@ -189,14 +195,21 @@ class CompressedTensorsW8A8Fp8(CompressedTensorsScheme):
             weight = weight.t()
 
         elif self.strategy == QuantizationStrategy.CHANNEL:
+            if not self.quant_config.is_checkpoint_fp8_serialized:
+                layer.weight, layer.weight_scale = fp8_channelwise_quantize(
+                    layer.weight
+                )
             weight, weight_scale, input_scale = process_fp8_weight_channel_strategy(
                 layer.weight, layer.weight_scale, getattr(layer, "input_scale", None)
             )
             weight = weight.t()
 
         elif self.strategy == QuantizationStrategy.BLOCK:
+            assert self.quant_config.is_checkpoint_fp8_serialized is False, (
+                "Checkpointing is not fp8 serialized and no online quantization supported for block quantization"
+            )
             assert self.is_static_input_scheme is False
-            weight, weight_scale = process_fp8_weight_block_strategy(
+            weight, weight_scale, input_scale = process_fp8_weight_block_strategy(
                 layer.weight, layer.weight_scale
             )
             input_scale = None

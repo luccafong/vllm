@@ -202,6 +202,7 @@ def get_default_quantization_hf_config(
                     },
                 }
             },
+            "is_checkpoint_fp8_serialized": False,
             "format": "float-quantized",
             "quant_method": "compressed-tensors",
             "quantization_status": "compressed",

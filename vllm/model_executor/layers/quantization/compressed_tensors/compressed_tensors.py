@@ -86,6 +86,7 @@ class CompressedTensorsConfig(QuantizationConfig):
         kv_cache_scheme: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
         transform_config: dict[str, Any] | None = None,
+        is_checkpoint_fp8_serialized: bool = False,
     ):
         super().__init__()
         self.ignore = ignore
@@ -96,6 +97,7 @@ class CompressedTensorsConfig(QuantizationConfig):
         self.sparsity_scheme_map = sparsity_scheme_map
         self.sparsity_ignore_list = sparsity_ignore_list
         self.config = config
+        self.is_checkpoint_fp8_serialized = is_checkpoint_fp8_serialized
 
         if transform_config:
             self.transform_config = TransformConfig.model_validate(transform_config)
@@ -171,7 +173,10 @@ class CompressedTensorsConfig(QuantizationConfig):
             config=config
         )
         transform_config = config.get("transform_config")
-
+        
+        quant_method = cls.get_from_keys(config, ["quant_method"])
+        is_checkpoint_fp8_serialized = cls.get_from_keys_or(config, ["is_checkpoint_fp8_serialized"], "fp8" in quant_method)
+    
         return cls(
             target_scheme_map=target_scheme_map,
             ignore=ignore,
@@ -180,6 +185,7 @@ class CompressedTensorsConfig(QuantizationConfig):
             sparsity_ignore_list=sparsity_ignore_list,
             config=config,
             transform_config=transform_config,
+            is_checkpoint_fp8_serialized=is_checkpoint_fp8_serialized,
         )
 
     @classmethod

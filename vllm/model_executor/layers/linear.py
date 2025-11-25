@@ -287,17 +287,17 @@ class LinearBase(CustomOp):
         self.tp_rank = get_tensor_model_parallel_rank() if not disable_tp else 0
         self.tp_size = get_tensor_model_parallel_world_size() if not disable_tp else 1
 
-        if (
-            self.quant_method.__class__.__name__ in WEIGHT_LOADER_V2_SUPPORTED
-            and callable(getattr(self, "weight_loader_v2", None))
-        ):
-            self.weight_loader_v2 = self.add_preprocessor_to_weight_loader(
-                self.weight_loader_v2  # type: ignore
-            )
-        if callable(getattr(self, "weight_loader", None)):
-            self.weight_loader = self.add_preprocessor_to_weight_loader(
-                self.weight_loader  # type: ignore
-            )
+        # if (
+        #     self.quant_method.__class__.__name__ in WEIGHT_LOADER_V2_SUPPORTED
+        #     and callable(getattr(self, "weight_loader_v2", None))
+        # ):
+        #     self.weight_loader_v2 = self.add_preprocessor_to_weight_loader(
+        #         self.weight_loader_v2  # type: ignore
+        #     )
+        # if callable(getattr(self, "weight_loader", None)):
+        #     self.weight_loader = self.add_preprocessor_to_weight_loader(
+        #         self.weight_loader  # type: ignore
+        #     )
 
     def add_preprocessor_to_weight_loader(self, weight_loader: Callable) -> Callable:
         def weigth_loader_with_preprocessor(

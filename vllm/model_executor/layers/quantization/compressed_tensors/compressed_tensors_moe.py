@@ -749,7 +749,7 @@ class CompressedTensorsW8A8Fp8MoEMethod(CompressedTensorsMoEMethod):
         layer.orig_dtype = params_dtype
         layer.weight_block_size = None
 
-        params_dtype = torch.float8_e4m3fn
+        params_dtype = torch.float8_e4m3fn if self.quant_config.is_checkpoint_fp8_serialized else params_dtype
 
         if self.block_quant:
             assert self.weight_block_size is not None
@@ -915,7 +915,24 @@ class CompressedTensorsW8A8Fp8MoEMethod(CompressedTensorsMoEMethod):
             layer.w2_input_scale = torch.nn.Parameter(
                 layer.w2_input_scale.max(), requires_grad=False
             )
+        if not self.quant_config.is_checkpoint_fp8_serialized:
+            if self.weight_quant.strategy == QuantizationStrategy.CHANNEL:
+                logger.info(f"Online quantizing weights for fp8 moe layer with shape of {layer.w13_weight.shape=}")
+                layer.w13_weight.data, w13_weight_scale = fp8_channelwise_quantize(
+                    layer.w13_weight.data
+                )
+                layer.w13_weight_scale.data = w13_weight_scale.to(layer.w13_weight_scale.data.dtype)
+                layer.w2_weight.data, w2_weight_scale = fp8_channelwise_quantize(
+                    layer.w2_weight.data
+                )
+                layer.w2_weight_scale.data = w2_weight_scale.to(layer.w2_weight_scale.data.dtype)
 
+            else:
+                raise ValueError(
+                    "Only channelwise quantization is supported for "
+                    "fp8 moe layer."
+                )
+                
         if current_platform.is_fp8_fnuz():
             # Normalize the weights and scales
             w13_weight, w13_weight_scale, w13_input_scale = (

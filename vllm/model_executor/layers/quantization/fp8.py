@@ -259,7 +259,7 @@ class Fp8Config(QuantizationConfig):
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "Fp8Config":
         quant_method = cls.get_from_keys(config, ["quant_method"])
-        is_checkpoint_fp8_serialized = "fp8" in quant_method
+        is_checkpoint_fp8_serialized = cls.get_from_keys_or(config, ["is_checkpoint_fp8_serialized"], "fp8" in quant_method)
         activation_scheme = cls.get_from_keys(config, ["activation_scheme"])
         ignored_layers = cls.get_from_keys_or(config, ["ignored_layers"], None)
         weight_block_size = cls.get_from_keys_or(config, ["weight_block_size"], None)
